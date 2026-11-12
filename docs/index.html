@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>env-saaf — Zero-dependency env validator for Node.js</title>
+<meta name="description" content="env-saaf validates your .env at startup: typed values, all errors at once, code-vs-.env.example diff CLI, secret masking. Zero dependencies.">
+<style>
+  :root{
+    --bg:#0b0d16; --panel:#12152a; --panel2:#171b33; --line:#232842;
+    --text:#eef0ff; --muted:#9aa3c7; --red:#e23345; --blue:#4fb3e8; --green:#2fd39a;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.6}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  header{padding:72px 0 48px;text-align:center}
+  .badge-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:26px}
+  .badge-row img{height:22px}
+  h1{font-size:64px;letter-spacing:-1.5px;font-weight:800}
+  h1 .saaf{color:var(--green)}
+  .tagline{font-size:21px;color:var(--muted);max-width:640px;margin:14px auto 0}
+  .install{display:inline-flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin-top:32px;font-family:var(--mono);font-size:17px}
+  .install button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;font-weight:600}
+  .install button:hover{opacity:.9}
+  .cta-row{display:flex;gap:12px;justify-content:center;margin-top:26px;flex-wrap:wrap}
+  .cta{padding:11px 22px;border-radius:10px;font-weight:600;font-size:15px}
+  .cta.primary{background:var(--red);color:#fff}
+  .cta.ghost{border:1px solid var(--line);color:var(--text);background:var(--panel)}
+  section{padding:38px 0}
+  h2{font-size:30px;letter-spacing:-.5px;margin-bottom:8px}
+  .sub{color:var(--muted);margin-bottom:24px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .card h3{font-size:17px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .card code{font-family:var(--mono);color:var(--red);font-size:13.5px}
+  pre{background:#07080f;border:1px solid var(--line);border-radius:14px;padding:22px;overflow-x:auto;font-family:var(--mono);font-size:14.5px;line-height:1.7}
+  pre .k{color:var(--blue)} pre .s{color:var(--green)} pre .c{color:#5b6284}
+  .cmd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .cmd{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .cmd code{display:block;font-family:var(--mono);color:var(--green);font-size:14.5px;margin-bottom:8px}
+  .cmd p{color:var(--muted);font-size:14.5px}
+  .versions{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .ver{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .ver .v{font-family:var(--mono);color:var(--red);font-weight:700;font-size:15px}
+  .ver h3{margin:6px 0 8px;font-size:17px}
+  .ver p{color:var(--muted);font-size:14.5px}
+  footer{border-top:1px solid var(--line);padding:34px 0 46px;text-align:center;color:var(--muted);font-size:14.5px}
+  footer a{margin:0 10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="badge-row">
+      <a href="https://www.npmjs.com/package/env-saaf"><img alt="npm version" src="https://img.shields.io/npm/v/env-saaf?color=CB3837&labelColor=0b0d16&logo=npm"></a>
+      <a href="https://github.com/abhi478jeetur-rgb/env-saaf"><img alt="GitHub" src="https://img.shields.io/badge/Code-GitHub-4FB3E8?labelColor=0b0d16&logo=github"></a>
+      <img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-2FD39A?labelColor=0b0d16">
+      <img alt="MIT License" src="https://img.shields.io/badge/License-MIT-4FB3E8?labelColor=0b0d16">
+    </div>
+    <h1>env-<span class="saaf">saaf</span></h1>
+    <p class="tagline">Zero-dependency environment variable validator for Node.js.<br>Fail fast at startup, with typed values and every error listed at once.</p>
+    <div class="install">
+      <span id="installCmd">npm install env-saaf</span>
+      <button onclick="copyInstall(this)">Copy</button>
+    </div>
+    <div class="cta-row">
+      <a class="cta primary" href="https://www.npmjs.com/package/env-saaf">Get it on npm</a>
+      <a class="cta ghost" href="https://github.com/abhi478jeetur-rgb/env-saaf">View source</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>The bugs it kills</h2>
+    <p class="sub">Every <code style="font-family:var(--mono)">process.env</code> value is a string. That one fact causes the same production bugs again and again:</p>
+    <div class="cards">
+      <div class="card">
+        <h3><code>"false"</code> is truthy</h3>
+        <p>Set <code>DEBUG=false</code> and your debug code still runs, because a non-empty string is truthy in JavaScript. env-saaf parses real booleans.</p>
+      </div>
+      <div class="card">
+        <h3><code>"3000" + 1 = "30001"</code></h3>
+        <p>Ports and numbers arrive as strings, so arithmetic silently becomes concatenation. env-saaf returns typed numbers and validated ports (1–65535).</p>
+      </div>
+      <div class="card">
+        <h3>Missing in production</h3>
+        <p>A forgotten variable does not fail at startup — it fails on the first request that needs it. env-saaf refuses to boot and lists <b>all</b> problems in one error.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+    <p class="sub">One schema, one call. The result is a frozen object with correctly typed values.</p>
+    <pre><span class="k">const</span> { validateEnv } = <span class="k">require</span>(<span class="s">'env-saaf'</span>);
+
+<span class="k">const</span> env = validateEnv({
+  PORT:      { type: <span class="s">'port'</span>, required: <span class="k">true</span> },
+  DEBUG:     { type: <span class="s">'boolean'</span>, default: <span class="k">false</span> },
+  API_URL:   { type: <span class="s">'url'</span>, required: <span class="k">true</span> },
+  LOG_LEVEL: { type: <span class="s">'string'</span>, choices: [<span class="s">'info'</span>, <span class="s">'warn'</span>, <span class="s">'error'</span>], default: <span class="s">'info'</span> },
+});
+
+<span class="c">// env.PORT is a number · env.DEBUG is a real boolean</span>
+<span class="c">// anything wrong? One EnvSaafError listing every problem.</span></pre>
+  </section>
+
+  <section>
+    <h2>Keep .env.example honest</h2>
+    <p class="sub">Your code and your <code style="font-family:var(--mono)">.env.example</code> drift apart silently. The CLI catches it — made for CI.</p>
+    <div class="cmd-grid">
+      <div class="cmd"><code>npx env-saaf scan ./src</code><p>Lists every env var your code actually uses — dot access, bracket access and destructuring.</p></div>
+      <div class="cmd"><code>npx env-saaf check .</code><p>Diffs code usage against .env.example. Exit code 1 if anything used is undocumented.</p></div>
+      <div class="cmd"><code>npx env-saaf example ./src</code><p>Drafts a fresh .env.example straight from a code scan.</p></div>
+      <div class="cmd"><code>maskSecrets(process.env)</code><p>Log your config safely — secrets print masked (<span style="font-family:var(--mono)">sk***56</span>), never in full.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Versions</h2>
+    <p class="sub">Built in the open, one honest step at a time.</p>
+    <div class="versions">
+      <div class="ver"><span class="v">v0.1.0</span><h3>Core validation</h3><p>validateEnv with typed coercion — string, number, boolean, url, port — plus required, defaults and choices. All errors collected at once.</p></div>
+      <div class="ver"><span class="v">v0.2.0</span><h3>Files, scanning, CLI</h3><p>.env parsing, code scanning for process.env usage, used-vs-documented diff, and the env-saaf check / scan CLI with CI exit codes.</p></div>
+      <div class="ver"><span class="v">v1.0.0</span><h3>Stable 1.0</h3><p>Secret masking, .env.example generation from schema and from code scans, TypeScript definitions, stable API.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <div>
+      <a href="https://www.npmjs.com/package/env-saaf">npm</a> ·
+      <a href="https://github.com/abhi478jeetur-rgb/env-saaf">GitHub</a> ·
+      <a href="https://github.com/abhi478jeetur-rgb">Abhijeet Kumar</a>
+    </div>
+    <p style="margin-top:10px">MIT © Abhijeet Kumar · <i>saaf</i> (साफ़) = clean, clear — config you can trust.</p>
+  </footer>
+
+</div>
+<script>
+function copyInstall(btn){
+  navigator.clipboard.writeText(document.getElementById('installCmd').textContent).then(function(){
+    btn.textContent = 'Copied';
+    setTimeout(function(){ btn.textContent = 'Copy'; }, 1600);
+  });
+}
+</script>
+</body>
+</html>
