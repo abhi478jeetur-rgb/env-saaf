@@ -18,8 +18,16 @@
   "scripts": {
     "test": "node test.js"
   },
-  "version": "0.2.0",
+  "version": "1.0.0",
   "bin": {
     "env-saaf": "cli.js"
-  }
+  },
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "cli.js",
+    "README.md",
+    "LICENSE"
+  ]
 }

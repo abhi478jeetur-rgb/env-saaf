@@ -19,7 +19,7 @@ Existing fixes (zod, envalid) are powerful but heavy for small projects. `env-sa
 npm install env-saaf
 ```
 
-## Use (v0.1.0)
+## Use
 
 ```js
 const { validateEnv } = require('env-saaf');
@@ -35,11 +35,26 @@ const env = validateEnv({
 // Missing/invalid vars throw ONE error listing ALL problems
 ```
 
+### Keep `.env.example` honest (CLI)
+
+```bash
+npx env-saaf scan ./src     # every env var your code actually uses
+npx env-saaf check .        # code vs .env.example diff — exit 1 if undocumented vars exist (CI-ready)
+npx env-saaf example ./src  # draft a .env.example from a code scan
+```
+
+### Log config without leaking secrets
+
+```js
+const { maskSecrets } = require('env-saaf');
+console.log(maskSecrets(process.env)); // values masked: sk***56
+```
+
 ## Versions
 
 - **v0.1.0** — core `validateEnv`: types (string/number/boolean/url/port), required, defaults, choices, all-errors-at-once.
-- **v0.2.0** — `.env` file parsing, code scanning (used vs documented diff), CLI.
-- **v1.0.0** — secret masking, `.env.example` generation from schema, TypeScript definitions.
+- **v0.2.0** — `.env` file parsing, code scanning (used vs documented diff), CLI (`check` / `scan`).
+- **v1.0.0** — secret masking, `.env.example` generation from schema and from code scan, TypeScript definitions, stable API.
 
 ## License
 
