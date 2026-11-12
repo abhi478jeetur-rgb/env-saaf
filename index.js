@@ -1,14 +1,12 @@
 'use strict';
 /**
- * env-saaf v0.1.0 — zero-dependency env validator.
- * Problem it solves (from research):
- *  - process.env values are ALWAYS strings: "false" is truthy, "3000" + 1 === "30001"
- *  - Missing vars crash in production, not at startup
- *  - Checking vars one-by-one is tedious; errors should be collected and shown together
- * API: validateEnv(schema, env?) -> typed object, throws EnvSaafError with ALL errors
- * Schema: { KEY: { type, required, default, choices } }
- * Types: string | number | boolean | url | port
+ * env-saaf — zero-dependency env validator.
+ * v0.2.0 adds: parseEnvFile, scanCode (process.env usage in code),
+ * diffEnv (used vs documented), and a CLI (bin: env-saaf).
+ * v0.1.0 core: validateEnv with typed coercion.
  */
+const fs = require('node:fs');
+const path = require('node:path');
 
 class EnvSaafError extends Error {
   constructor(errors) {
@@ -21,8 +19,7 @@ class EnvSaafError extends Error {
 function coerce(key, raw, type) {
   const v = typeof raw === 'string' ? raw.trim() : raw;
   switch (type) {
-    case 'string':
-      return String(v);
+    case 'string': return String(v);
     case 'number': {
       const n = Number(v);
       if (v === '' || Number.isNaN(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
@@ -44,14 +41,12 @@ function coerce(key, raw, type) {
       if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`${key}: expected a port (1-65535), got "${raw}"`);
       return n;
     }
-    default:
-      throw new Error(`${key}: unknown type "${type}"`);
+    default: throw new Error(`${key}: unknown type "${type}"`);
   }
 }
 
 function validateEnv(schema, env = process.env) {
-  const out = {};
-  const errors = [];
+  const out = {}; const errors = [];
   for (const [key, rule] of Object.entries(schema)) {
     const raw = env[key];
     if (raw === undefined || raw === '') {
@@ -72,4 +67,62 @@ function validateEnv(schema, env = process.env) {
   return Object.freeze(out);
 }
 
-module.exports = { validateEnv, EnvSaafError };
+/** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments. */
+function parseEnvFile(text) {
+  const out = {};
+  for (const line of String(text).split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let val = m[2].trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+    out[m[1]] = val;
+  }
+  return out;
+}
+
+/** Find every process.env.KEY usage in JS/TS source text. Returns sorted unique names. */
+function scanCode(text) {
+  const found = new Set();
+  const patterns = [
+    /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
+    /process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
+  ];
+  for (const re of patterns) for (const m of String(text).matchAll(re)) found.add(m[1]);
+  const destructure = /const\s*\{([^}]+)\}\s*=\s*process\.env/g;
+  for (const m of String(text).matchAll(destructure)) {
+    for (const part of m[1].split(',')) {
+      const name = part.split(':')[0].split('=')[0].trim();
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
+    }
+  }
+  return [...found].sort();
+}
+
+/** Scan a folder (recursive, .js/.cjs/.mjs/.ts) for env usage. */
+function scanDir(dir) {
+  const found = new Set();
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.git')) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|cjs|mjs|ts|tsx|jsx)$/.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+    }
+  };
+  walk(dir);
+  return [...found].sort();
+}
+
+/** Compare code usage vs a documented set (e.g. keys of .env.example). */
+function diffEnv(usedKeys, documentedKeys) {
+  const doc = new Set(documentedKeys);
+  const used = new Set(usedKeys);
+  return {
+    usedNotDocumented: usedKeys.filter(k => !doc.has(k)),
+    documentedNotUsed: documentedKeys.filter(k => !used.has(k)),
+  };
+}
+
+module.exports = { validateEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv };
