@@ -35,6 +35,27 @@ const env = validateEnv({
 // Missing/invalid vars throw ONE error listing ALL problems
 ```
 
+### Loading a real `.env` file
+
+By default `validateEnv` reads from `process.env`. To validate the values in an actual `.env` file instead, parse the file and pass it in:
+
+```js
+const fs = require('node:fs');
+const { parseEnvFile, validateEnv } = require('env-saaf');
+
+const fileEnv = parseEnvFile(fs.readFileSync('.env', 'utf8'));
+const env = validateEnv({
+  PORT:    { type: 'port', required: true },
+  API_URL: { type: 'url', required: true },
+}, fileEnv);
+```
+
+ES modules work too:
+
+```js
+import { validateEnv } from 'env-saaf';
+```
+
 ### Keep `.env.example` honest (CLI)
 
 ```bash
