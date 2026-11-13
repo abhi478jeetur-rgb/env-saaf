@@ -42,4 +42,45 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// feat: loadEnv — .env file padho + validate karo, ek call me (fixes #2)
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-loadenv-'));
+  const file = path.join(dir, '.env');
+  fs.writeFileSync(file, 'PORT=4000\nDEBUG=true\nAPI_URL=https://api.example.com/v1\n');
+  const schema = {
+    PORT: { type: 'port', required: true },
+    DEBUG: { type: 'boolean', default: false },
+    API_URL: { type: 'url', required: true },
+  };
+  // basic: file se typed values
+  const env1 = loadEnv(schema, { path: file, env: {} });
+  assert.strictEqual(env1.PORT, 4000);
+  assert.strictEqual(env1.DEBUG, true);
+  assert.strictEqual(env1.API_URL, 'https://api.example.com/v1');
+  assert.ok(Object.isFrozen(env1));
+  // override: false (default) — base env jeet-ta hai; true — file jeet-ti hai
+  assert.strictEqual(loadEnv(schema, { path: file, env: { PORT: '5000' } }).PORT, 5000);
+  assert.strictEqual(loadEnv(schema, { path: file, env: { PORT: '5000' }, override: true }).PORT, 4000);
+  // assign: validated values base env me strings banke likhe jate hain
+  const target = {};
+  loadEnv(schema, { path: file, env: target, assign: true });
+  assert.strictEqual(target.PORT, '4000');
+  assert.strictEqual(target.DEBUG, 'true');
+  // assign ke bina process.env jaisa base env untouched rehta hai
+  const untouched = { PORT: '5000' };
+  loadEnv(schema, { path: file, env: untouched });
+  assert.strictEqual(untouched.PORT, '5000');
+  assert.strictEqual(untouched.DEBUG, undefined);
+  // missing file + required schema -> saaf error
+  assert.throws(() => loadEnv(schema, { path: path.join(dir, 'nope.env'), env: {} }), /file not found/);
+  // missing file + sab optional -> defaults, no throw
+  const env4 = loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: path.join(dir, 'nope.env'), env: {} });
+  assert.strictEqual(env4.PORT, 3000);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.0.0: all tests passed');

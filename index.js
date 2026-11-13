@@ -67,6 +67,41 @@ function validateEnv(schema, env = process.env) {
   return Object.freeze(out);
 }
 
+/**
+ * Load a .env file and validate it in one call.
+ * Options:
+ *   path     — .env file to read (default '.env')
+ *   env      — base env to merge with (default process.env); its values win unless override is true
+ *   override — if true, values from the file win over `env` (default false)
+ *   assign   — if true, write the validated values back into `env` as strings
+ *              (default false — process.env is never mutated silently)
+ * Any other options are passed through to validateEnv (e.g. { strict: true }).
+ * A missing file throws a clear error unless every schema key is optional
+ * (has a default or is not required).
+ */
+function loadEnv(schema, options = {}) {
+  const { path: filePath = '.env', env = process.env, override = false, assign = false, ...rest } = options;
+  let fileText = null;
+  try {
+    fileText = fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    const needed = Object.entries(schema)
+      .filter(([, rule]) => rule.required && rule.default === undefined)
+      .map(([key]) => key);
+    if (needed.length) {
+      throw new Error(`env-saaf: .env file not found: ${filePath} (required variables missing: ${needed.join(', ')})`);
+    }
+  }
+  const fileEnv = fileText === null ? {} : parseEnvFile(fileText);
+  const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
+  const validated = validateEnv(schema, merged, rest);
+  if (assign) {
+    for (const [key, value] of Object.entries(validated)) env[key] = String(value);
+  }
+  return validated;
+}
+
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments. */
 function parseEnvFile(text) {
   const out = {};
@@ -150,4 +185,4 @@ function generateExample(schema) {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { validateEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample };
+module.exports = { validateEnv, loadEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample };
