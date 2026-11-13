@@ -108,7 +108,7 @@ function scanDir(dir) {
       if (e.name === 'node_modules' || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (/\.(js|cjs|mjs|ts|tsx|jsx)$/.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+      else if (/\.(js|cjs|mjs|ts|mts|cts|tsx|jsx)$/.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
     }
   };
   walk(dir);

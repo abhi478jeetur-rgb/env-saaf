@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+_Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla version (1.1.0) npm par aayega — har chhote fix par version nahi badhta._
+
+- Fixed: `scanDir` now also scans `.mts` and `.cts` files (TypeScript ESM/CJS modules were silently skipped)
+
 ## 1.0.0
 - `maskValue` / `maskSecrets` — log-safe masked copies of env values (real secrets never printed in full)
 - `generateExample(schema)` — generate `.env.example` text from a schema (placeholders/defaults only)

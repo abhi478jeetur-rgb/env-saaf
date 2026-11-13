@@ -28,4 +28,18 @@ assert.ok(ex.includes('PORT=3000'));
 assert.ok(ex.includes('API_KEY=your_value_here'));
 assert.ok(!ex.includes('sk_live'));
 
+// Unreleased fix: scanDir ab .mts/.cts files bhi scan karta hai
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { scanDir } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-'));
+  fs.writeFileSync(path.join(dir, 'a.mts'), 'export const x = process.env.FROM_MTS;');
+  fs.writeFileSync(path.join(dir, 'b.cts'), 'export const y = process.env.FROM_CTS;');
+  fs.writeFileSync(path.join(dir, 'c.ts'), 'export const z = process.env.FROM_TS;');
+  assert.deepStrictEqual(scanDir(dir), ['FROM_CTS', 'FROM_MTS', 'FROM_TS']);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
