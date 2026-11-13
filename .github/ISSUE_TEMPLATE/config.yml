@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: npm package page
+    url: https://www.npmjs.com/package/env-saaf
+    about: Install instructions and published versions
+  - name: Landing page
+    url: https://abhi478jeetur-rgb.github.io/env-saaf/
+    about: What env-saaf does, with examples

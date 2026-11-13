@@ -56,6 +56,10 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 - **v0.2.0** — `.env` file parsing, code scanning (used vs documented diff), CLI (`check` / `scan`).
 - **v1.0.0** — secret masking, `.env.example` generation from schema and from code scan, TypeScript definitions, stable API.
 
+## Contributing
+
+Issues and pull requests are welcome — including tiny ones. Start with the issues labelled [`good first issue`](https://github.com/abhi478jeetur-rgb/env-saaf/labels/good%20first%20issue), and please read [CONTRIBUTING.md](CONTRIBUTING.md) first: it explains the zero-dependency rule, how to run the tests, and why releases here batch 10–15 improvements before a version bump.
+
 ## License
 
 MIT © Abhijeet Kumar
