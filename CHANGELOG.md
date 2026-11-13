@@ -5,6 +5,7 @@
 _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla version (1.1.0) npm par aayega — har chhote fix par version nahi badhta._
 
 - Fixed: `scanDir` now also scans `.mts` and `.cts` files (TypeScript ESM/CJS modules were silently skipped)
+- Docs: README now shows how to load a real `.env` file (`parseEnvFile` + `validateEnv`) and includes an ES module import example
 
 ## 1.0.0
 - `maskValue` / `maskSecrets` — log-safe masked copies of env values (real secrets never printed in full)
