@@ -42,6 +42,30 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #14: parseEnvFile — unquoted value ke baad inline comment hatao;
+// quotes ke andar '#' safe hai; quoted value ke baad ka comment bhi hatao
+{
+  const { parseEnvFile, loadEnv } = require('./index');
+  assert.deepStrictEqual(
+    parseEnvFile('PORT=3000 # my port\nDEBUG=true # enable logs\nNAME="x # y"\nNOTE=\'a # b\' # trailing\nEMPTY= # nothing\nURL=https://example.com/#frag\n'),
+    { PORT: '3000', DEBUG: 'true', NAME: 'x # y', NOTE: 'a # b', EMPTY: '', URL: 'https://example.com/#frag' }
+  );
+  // end-to-end: inline comment wali .env file loadEnv se validate ho
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-inline-'));
+  const file = path.join(dir, '.env');
+  fs.writeFileSync(file, 'PORT=4000 # app port\nDEBUG=true # verbose\n');
+  const envInline = loadEnv(
+    { PORT: { type: 'port', required: true }, DEBUG: { type: 'boolean', default: false } },
+    { path: file, env: {} }
+  );
+  assert.strictEqual(envInline.PORT, 4000);
+  assert.strictEqual(envInline.DEBUG, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // feat: loadEnv — .env file padho + validate karo, ek call me (fixes #2)
 {
   const fs = require('node:fs');
