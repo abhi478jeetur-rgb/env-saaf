@@ -16,7 +16,10 @@
   "main": "index.js",
   "name": "env-saaf",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js && tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
   },
   "version": "1.0.0",
   "bin": {

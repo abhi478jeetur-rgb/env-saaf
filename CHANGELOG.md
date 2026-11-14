@@ -8,6 +8,7 @@ _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla v
 - Docs: README now shows how to load a real `.env` file (`parseEnvFile` + `validateEnv`) and includes an ES module import example
 - Added: `loadEnv(schema, options?)` — read a `.env` file and validate it in one call (`path`, `override`, `assign` options; `process.env` untouched by default)
 - Added: strict mode — `validateEnv(schema, env, { strict: true })` reports variables that are set but not in the schema (typos like `DATABSE_URL` no longer slip through)
+- TypeScript: `validateEnv` ka return type ab schema se infer hota hai — `type: 'port'`/`'number'` → `number`, `'boolean'` → `boolean`; `required`/`default` wali key hamesha maujood, baaki `| undefined`; galat key par ab TypeScript error aata hai
 
 ## 1.0.0
 - `maskValue` / `maskSecrets` — log-safe masked copies of env values (real secrets never printed in full)
