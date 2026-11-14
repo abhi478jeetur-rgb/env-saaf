@@ -122,7 +122,18 @@ function parseEnvFile(text) {
     const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!m) continue;
     let val = m[2].trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+    if (val.startsWith('"') || val.startsWith("'")) {
+      // Quoted value: '#' andar safe hai; closing quote ke baad ka comment hatao
+      // (NAME="x # y" -> x # y; NAME="x" # note -> x)
+      const q = val[0];
+      const end = val.indexOf(q, 1);
+      val = end === -1 ? val : val.slice(1, end);
+    } else {
+      // Unquoted value: line ke shuru ya whitespace ke baad '#' se inline comment
+      // (PORT=3000 # my port -> 3000; URL me '#frag' bina space ke safe hai)
+      const hash = val.search(/(^|\s)#/);
+      if (hash !== -1) val = val.slice(0, hash).trim();
+    }
     out[m[1]] = val;
   }
   return out;
