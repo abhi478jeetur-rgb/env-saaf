@@ -35,6 +35,17 @@ const env = validateEnv({
 // Missing/invalid vars throw ONE error listing ALL problems
 ```
 
+### Strict mode — catch typos in variable names
+
+By default `validateEnv` only looks at keys in the schema. With `{ strict: true }` it also flags variables that are set but not in the schema — so a typo like `DATABSE_URL` next to the real `DATABASE_URL` no longer slips through:
+
+```js
+const env = validateEnv(schema, process.env, { strict: true });
+// throws EnvSaafError listing e.g. "DATABSE_URL: set but not in schema (strict mode)"
+```
+
+Default stays off — many apps share one environment with other tools.
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:

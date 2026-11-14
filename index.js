@@ -45,8 +45,15 @@ function coerce(key, raw, type) {
   }
 }
 
-function validateEnv(schema, env = process.env) {
+function validateEnv(schema, env = process.env, options = {}) {
   const out = {}; const errors = [];
+  if (options.strict) {
+    for (const key of Object.keys(env)) {
+      if (!Object.prototype.hasOwnProperty.call(schema, key) && env[key] !== undefined && env[key] !== '') {
+        errors.push(`${key}: set but not in schema (strict mode)`);
+      }
+    }
+  }
   for (const [key, rule] of Object.entries(schema)) {
     const raw = env[key];
     if (raw === undefined || raw === '') {
