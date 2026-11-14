@@ -10,6 +10,7 @@ _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla v
 - Added: strict mode — `validateEnv(schema, env, { strict: true })` reports variables that are set but not in the schema (typos like `DATABSE_URL` no longer slip through)
 - TypeScript: `validateEnv` ka return type ab schema se infer hota hai — `type: 'port'`/`'number'` → `number`, `'boolean'` → `boolean`; `required`/`default` wali key hamesha maujood, baaki `| undefined`; galat key par ab TypeScript error aata hai
 - Fixed: `url` values are returned exactly as provided — validation no longer normalizes them (a bare origin no longer gains a trailing slash)
+- Added: CLI `check` accepts `--file <name>` to compare code usage against a file other than `.env.example` (e.g. `.env.sample`)
 
 ## 1.0.0
 - `maskValue` / `maskSecrets` — log-safe masked copies of env values (real secrets never printed in full)

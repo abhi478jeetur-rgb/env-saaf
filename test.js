@@ -115,4 +115,23 @@ assert.ok(!ex.includes('sk_live'));
   assert.throws(() => validateEnv({ U: { type: 'url' } }, { U: 'not a url' }), /valid URL/);
 }
 
+// Issue #5: CLI 'check --file <name>' — .env.example ki jagah di gayi file se tulna
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cli-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG;');
+  fs.writeFileSync(path.join(dir, '.env.sample'), 'MY_FLAG=1\n');
+  const cli = path.join(__dirname, 'cli.js');
+  // --file .env.sample: sab documented hai, exit 0 (throw nahi hona chahiye)
+  execFileSync('node', [cli, 'check', dir, '--file', '.env.sample'], { stdio: 'pipe' });
+  // bina --file: .env.example maujood nahi, exit 2
+  let code = 0;
+  try { execFileSync('node', [cli, 'check', dir], { stdio: 'pipe' }); } catch (e) { code = e.status; }
+  assert.strictEqual(code, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.0.0: all tests passed');

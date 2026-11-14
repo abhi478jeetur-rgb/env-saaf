@@ -2,8 +2,9 @@
 'use strict';
 /**
  * env-saaf CLI
- *   env-saaf check [dir]  — scan code for process.env usage, compare with .env.example
- *                           exit 1 if anything used is not documented
+ *   env-saaf check [dir] [--file name] — scan code for process.env usage, compare with
+ *                           .env.example (or the --file given); exit 1 if anything
+ *                           used is not documented
  *   env-saaf scan  [dir]  — just list the env vars your code uses
  *   env-saaf example [dir] — print a .env.example draft from code usage (v1.0.0)
  */
@@ -11,23 +12,33 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { scanDir, parseEnvFile, diffEnv } = require('./index');
 
-const [cmd, dirArg] = process.argv.slice(2);
-const dir = dirArg || process.cwd();
+const argv = process.argv.slice(2);
+const cmd = argv[0];
+// --file <name> ya --file=<name> (sirf 'check' ke liye): tulna kis file se karni hai
+let fileOpt = '.env.example';
+const positional = [];
+for (let i = 1; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === '--file' && argv[i + 1]) fileOpt = argv[++i];
+  else if (a.startsWith('--file=')) fileOpt = a.slice('--file='.length);
+  else positional.push(a);
+}
+const dir = positional[0] || process.cwd();
 
 if (cmd === 'scan') {
   console.log(scanDir(dir).join('\n'));
 } else if (cmd === 'check') {
-  const examplePath = path.join(dir, '.env.example');
+  const examplePath = path.join(dir, fileOpt);
   if (!fs.existsSync(examplePath)) {
-    console.error('env-saaf: .env.example not found in ' + dir);
+    console.error(`env-saaf: ${fileOpt} not found in ` + dir);
     process.exit(2);
   }
   const documented = Object.keys(parseEnvFile(fs.readFileSync(examplePath, 'utf8')));
   const used = scanDir(dir);
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
-  usedNotDocumented.forEach(k => console.log(`MISSING in .env.example: ${k} (used in code)`));
-  documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in .env.example, never used in code)`));
-  if (!usedNotDocumented.length && !documentedNotUsed.length) console.log('env-saaf: all clean — code and .env.example match.');
+  usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
+  documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
+  if (!usedNotDocumented.length && !documentedNotUsed.length) console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
   process.exit(usedNotDocumented.length ? 1 : 0);
 } else if (cmd === 'example') {
   // v1.0.0: code scan karke .env.example ka draft banao (values placeholder only)
@@ -36,6 +47,6 @@ if (cmd === 'scan') {
   used.forEach(k => lines.push(`${k}=`));
   console.log(lines.join('\n'));
 } else {
-  console.log('Usage: env-saaf check [dir] | env-saaf scan [dir] | env-saaf example [dir]');
+  console.log('Usage: env-saaf check [dir] [--file name] | env-saaf scan [dir] | env-saaf example [dir]');
   process.exit(cmd ? 2 : 0);
 }

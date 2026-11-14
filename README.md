@@ -104,6 +104,7 @@ Schema seedha `validateEnv(...)` ko inline pass karo (ya `as const` use karo), t
 ```bash
 npx env-saaf scan ./src     # every env var your code actually uses
 npx env-saaf check .        # code vs .env.example diff — exit 1 if undocumented vars exist (CI-ready)
+npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf example ./src  # draft a .env.example from a code scan
 ```
 
