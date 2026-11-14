@@ -147,7 +147,7 @@ function scanCode(text) {
     /process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
   ];
   for (const re of patterns) for (const m of String(text).matchAll(re)) found.add(m[1]);
-  const destructure = /const\s*\{([^}]+)\}\s*=\s*process\.env/g;
+  const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\.env/g;
   for (const m of String(text).matchAll(destructure)) {
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
