@@ -33,8 +33,12 @@ function coerce(key, raw, type) {
       throw new Error(`${key}: expected a boolean (true/false), got "${raw}"`);
     }
     case 'url': {
-      try { return new URL(String(v)).toString(); }
+      // Validate karke ASLI string hi lautaao. new URL(...).toString() value ko
+      // normalize kar deta hai (jaise bare origin par trailing slash jud jata hai),
+      // jo user ke string comparison ko tod sakta hai — isliye sirf jaanch, badlaav nahi.
+      try { new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
+      return String(v);
     }
     case 'port': {
       const n = Number(v);

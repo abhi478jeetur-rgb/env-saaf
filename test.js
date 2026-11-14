@@ -105,4 +105,14 @@ assert.ok(!ex.includes('sk_live'));
   );
 }
 
+// Issue #3: 'url' type value bilkul waisa hi laute jaisa diya gaya tha —
+// normalize karke trailing slash NAHI judna chahiye, par galat URL par error aana chahiye
+{
+  const out = validateEnv({ API_URL: { type: 'url', required: true } }, { API_URL: 'https://api.example.com' });
+  assert.strictEqual(out.API_URL, 'https://api.example.com');
+  const out2 = validateEnv({ API_URL: { type: 'url', required: true } }, { API_URL: 'https://api.example.com/v1?x=1' });
+  assert.strictEqual(out2.API_URL, 'https://api.example.com/v1?x=1');
+  assert.throws(() => validateEnv({ U: { type: 'url' } }, { U: 'not a url' }), /valid URL/);
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
