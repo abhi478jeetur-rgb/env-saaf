@@ -13,7 +13,12 @@ export class EnvSaafError extends Error {
   errors: string[];
 }
 
-export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>): Record<string, string | number | boolean>;
+export interface ValidateOptions {
+  /** Report variables that are set but not in the schema (default false). */
+  strict?: boolean;
+}
+
+export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions): Record<string, string | number | boolean>;
 
 export interface LoadEnvOptions {
   path?: string;

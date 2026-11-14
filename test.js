@@ -83,4 +83,26 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// feat: strict mode — schema se bahar ke set variables flag karo (fixes #4)
+{
+  const schema = { PORT: { type: 'port', required: true } };
+  // non-strict (default): extra keys ignore hote hain
+  assert.strictEqual(validateEnv(schema, { PORT: '3000', DATABSE_URL: 'x' }).PORT, 3000);
+  // strict: unknown key error me aata hai
+  assert.throws(
+    () => validateEnv(schema, { PORT: '3000', DATABSE_URL: 'x' }, { strict: true }),
+    /DATABSE_URL: set but not in schema/
+  );
+  // khaali value strict me bhi ignore (missing jaisi)
+  assert.strictEqual(validateEnv(schema, { PORT: '3000', EMPTY_VAR: '' }, { strict: true }).PORT, 3000);
+  // ek hi pass me saari problems: unknown + missing
+  assert.throws(
+    () => validateEnv(schema, { DATABSE_URL: 'x' }, { strict: true }),
+    (e) => e instanceof EnvSaafError
+      && e.errors.length === 2
+      && e.errors.some(m => m.includes('DATABSE_URL'))
+      && e.errors.some(m => m.includes('PORT: missing'))
+  );
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
