@@ -80,6 +80,25 @@ ES modules work too:
 import { validateEnv } from 'env-saaf';
 ```
 
+### TypeScript: return type schema se infer hota hai
+
+`validateEnv` ka return type ab schema se banta hai — `type: 'port'` wali key `number` hoti hai, `boolean` wali `boolean`, aur `required`/`default` ke bina wali key `| undefined`:
+
+```ts
+import { validateEnv } from 'env-saaf';
+
+const env = validateEnv({
+  PORT:  { type: 'port', required: true },
+  DEBUG: { type: 'boolean' },
+});
+
+env.PORT.toFixed(0); // OK — PORT: number
+env.DEBUG;           // boolean | undefined
+env.TYPO;            // TypeScript error — schema me nahi hai
+```
+
+Schema seedha `validateEnv(...)` ko inline pass karo (ya `as const` use karo), taaki TypeScript literal types dekh sake. `EnvResult<S>` aur `EnvValue<R>` types alag se bhi export hote hain.
+
 ### Keep `.env.example` honest (CLI)
 
 ```bash
