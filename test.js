@@ -158,4 +158,16 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #15: scanCode — let aur var destructuring of process.env (previously only const)
+{
+  assert.deepStrictEqual(
+    scanCode('let { A } = process.env; var { B } = process.env; const { C } = process.env;'),
+    ['A', 'B', 'C']
+  );
+  assert.deepStrictEqual(
+    scanCode('let { API_URL: api = "http://localhost" } = process.env; var { PORT = 3000 } = process.env;'),
+    ['API_URL', 'PORT']
+  );
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
