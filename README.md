@@ -37,7 +37,20 @@ const env = validateEnv({
 
 ### Loading a real `.env` file
 
-By default `validateEnv` reads from `process.env`. To validate the values in an actual `.env` file instead, parse the file and pass it in:
+One call does it — read the file, parse it, validate it:
+
+```js
+const { loadEnv } = require('env-saaf');
+
+const env = loadEnv({
+  PORT:    { type: 'port', required: true },
+  API_URL: { type: 'url', required: true },
+}); // reads `.env` by default
+```
+
+Options: `{ path: '.env.local' }` to read another file, `{ override: true }` to let the file win over `process.env` (by default existing `process.env` values win), `{ assign: true }` to write the validated values back into `process.env` as strings. A missing file throws a clear error unless every variable is optional. By default `process.env` is never mutated.
+
+The manual way still works too — parse the file and pass it in:
 
 ```js
 const fs = require('node:fs');

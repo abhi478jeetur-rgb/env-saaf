@@ -14,6 +14,17 @@ export class EnvSaafError extends Error {
 }
 
 export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>): Record<string, string | number | boolean>;
+
+export interface LoadEnvOptions {
+  path?: string;
+  env?: Record<string, string | undefined>;
+  override?: boolean;
+  assign?: boolean;
+  /** Passed through to validateEnv (e.g. strict: true). */
+  strict?: boolean;
+}
+
+export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): Record<string, string | number | boolean>;
 export function parseEnvFile(text: string): Record<string, string>;
 export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];

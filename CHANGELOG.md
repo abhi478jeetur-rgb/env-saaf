@@ -6,6 +6,7 @@ _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla v
 
 - Fixed: `scanDir` now also scans `.mts` and `.cts` files (TypeScript ESM/CJS modules were silently skipped)
 - Docs: README now shows how to load a real `.env` file (`parseEnvFile` + `validateEnv`) and includes an ES module import example
+- Added: `loadEnv(schema, options?)` — read a `.env` file and validate it in one call (`path`, `override`, `assign` options; `process.env` untouched by default)
 
 ## 1.0.0
 - `maskValue` / `maskSecrets` — log-safe masked copies of env values (real secrets never printed in full)
