@@ -5,6 +5,7 @@
 - Added: CLI `check` now compares the keys in a real `.env` with the template when the file is present, reporting typo'd keys (`EXTRA in .env`) and unset template keys (`MISSING in .env`); `--json` output gains `envExtra` and `envMissing` fields (fixes #100)
 - Added: CLI `--version` / `-v` prints the installed version from `package.json` and exits 0, before or after a subcommand (fixes #98)
 - Added: `env-saaf example --write[=<file>]` writes the draft straight to `.env.example` (or the file named) instead of printing it, with a short confirmation; an existing file is only overwritten when `--force` is also passed (fixes #102)
+- Fixed: `scanCode` (and so `env-saaf scan`, `check` and `example`) no longer reports `process.env.X` mentioned inside `//` / `/* */` comments or string and template-literal text; real reads — dot, bracket with a literal key, and destructuring, including inside `${...}` — are still found (fixes #115)
 - Fixed: CLI now recognises `--help` / `-h` after a subcommand (e.g. `env-saaf scan --help`), printing usage and exiting 0 instead of treating the flag as a directory (fixes #97)
 - Fixed: `parseEnvFile` no longer ends a quoted value at an escaped quote — `B='it\'s'` parses to `it's` and `D="it\"s"` to `it"s`; other backslashes (e.g. `C:\path`) stay literal (fixes #117)
 - Fixed: `port` accepts 0 so a server can ask the operating system for an available port (fixes #101).

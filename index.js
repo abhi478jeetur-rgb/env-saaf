@@ -369,9 +369,105 @@ function parseEnvFile(text) {
   return out;
 }
 
-/** Find every process.env.KEY usage in JS/TS source text. Returns sorted unique names. */
+// Blank out comments and string/template text so that a `process.env.X`
+// mentioned in prose (a doc comment, a log message) is not reported as a read.
+// Every blanked character becomes a space (newlines are kept), so the result
+// lines up with the input. A string literal directly inside `process.env[...]`
+// is kept: that is a real bracket read. Code inside a template's `${...}` is
+// still scanned. A `/` after an operator or opening bracket starts a regex
+// literal, whose body is skipped so a quote inside it does not open a string.
+function stripCommentsAndStrings(src) {
+  const out = [];
+  const blank = (ch) => (ch === '\n' ? '\n' : ' ');
+  const isBracketRead = () => /process\.env\s*\[\s*$/.test(out.slice(-40).join(''));
+  const prevSignificant = () => {
+    for (let k = out.length - 1; k >= 0; k--) if (!/\s/.test(out[k])) return out[k];
+    return '';
+  };
+  // Each entry is the brace depth of an open `${` inside a template literal.
+  const templates = [];
+  let depth = 0;
+  let i = 0;
+  const n = src.length;
+  const readQuoted = (quote, keep) => {
+    out.push(quote);
+    i++;
+    while (i < n && src[i] !== quote && src[i] !== '\n') {
+      if (src[i] === '\\' && i + 1 < n) { out.push(keep ? src[i] : ' ', keep ? src[i + 1] : blank(src[i + 1])); i += 2; continue; }
+      out.push(keep ? src[i] : blank(src[i]));
+      i++;
+    }
+    if (i < n && src[i] === quote) { out.push(quote); i++; }
+  };
+  // Reads template text up to the closing backtick or the next `${`.
+  const readTemplate = (keep) => {
+    while (i < n) {
+      const c = src[i];
+      if (c === '\\' && i + 1 < n) { out.push(keep ? c : ' ', keep ? src[i + 1] : blank(src[i + 1])); i += 2; continue; }
+      if (c === '`') { out.push('`'); i++; return; }
+      if (c === '$' && src[i + 1] === '{') { out.push('${'); i += 2; templates.push(depth); depth++; return; }
+      out.push(keep ? c : blank(c));
+      i++;
+    }
+  };
+  while (i < n) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') { out.push(' '); i++; }
+    } else if (c === '/' && next === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end === -1 ? n : end + 2;
+      while (i < stop) { out.push(blank(src[i])); i++; }
+    } else if (c === '\'' || c === '"') {
+      readQuoted(c, isBracketRead());
+    } else if (c === '`') {
+      const keep = isBracketRead();
+      out.push('`');
+      i++;
+      readTemplate(keep);
+    } else if (c === '/' && (prevSignificant() === '' || '(,=:[!&|?{};+-*%<>~^'.includes(prevSignificant()))) {
+      // Regex literal: skip to the closing unescaped `/` outside a class.
+      out.push('/');
+      i++;
+      let inClass = false;
+      while (i < n && src[i] !== '\n') {
+        const r = src[i];
+        if (r === '\\' && i + 1 < n) { out.push(' ', blank(src[i + 1])); i += 2; continue; }
+        if (r === '[') inClass = true;
+        else if (r === ']') inClass = false;
+        else if (r === '/' && !inClass) break;
+        out.push(' ');
+        i++;
+      }
+      if (i < n && src[i] === '/') { out.push('/'); i++; }
+    } else if (c === '{') {
+      depth++;
+      out.push(c);
+      i++;
+    } else if (c === '}') {
+      depth--;
+      out.push(c);
+      i++;
+      if (templates.length && templates[templates.length - 1] === depth) {
+        templates.pop();
+        readTemplate(false);
+      }
+    } else {
+      out.push(c);
+      i++;
+    }
+  }
+  return out.join('');
+}
+
+/**
+ * Find every process.env.KEY usage in JS/TS source text. Returns sorted unique names.
+ * Mentions inside comments and string literals are ignored.
+ */
 function scanCode(text) {
   const found = new Set();
+  text = stripCommentsAndStrings(String(text));
   const patterns = [
     /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
     /process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,

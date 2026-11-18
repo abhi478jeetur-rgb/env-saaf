@@ -927,4 +927,30 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #115: scanCode ignores process.env mentions in comments and string
+// literals, while real reads (dot, bracket, template, destructuring) are found.
+{
+  assert.deepStrictEqual(scanCode('// set process.env.FOO first'), []);
+  assert.deepStrictEqual(scanCode('/* use process.env.BAR */'), []);
+  assert.deepStrictEqual(scanCode('/**\n * reads process.env.DOC\n */\nprocess.env.REAL_ONE;'), ['REAL_ONE']);
+  assert.deepStrictEqual(scanCode('const s = "see process.env.BAZ in docs"'), []);
+  assert.deepStrictEqual(scanCode("const s = 'process.env.SINGLE'; const t = 'it\\'s process.env.ESC'"), []);
+  // Template text is ignored, but code inside ${...} is still scanned.
+  assert.deepStrictEqual(
+    scanCode('const s = `process.env.TEXT ${process.env.INTERP} ${ {a: 1}.a } process.env.MORE`; process.env.AFTER;'),
+    ['AFTER', 'INTERP']);
+  assert.deepStrictEqual(scanCode('const s = `${`inner ${process.env.NESTED}`}`'), ['NESTED']);
+  // Bracket reads with a literal key are real reads and still found.
+  assert.deepStrictEqual(
+    scanCode('process.env["A"]; process.env[\'B\']; process.env[`C`]; process.env[`P_${X}`];'),
+    ['A', 'B', 'C']);
+  assert.deepStrictEqual(
+    scanCode('const { API_URL: api = "http://process.env.NO" } = process.env;'),
+    ['API_URL']);
+  // A quote inside a regex literal does not swallow the rest of the line,
+  // and a division is not mistaken for a regex.
+  assert.deepStrictEqual(scanCode('const r = /"/; const q = process.env.Q;'), ['Q']);
+  assert.deepStrictEqual(scanCode('const d = a / b; const e = process.env.E / 2;'), ['E']);
+}
+
 console.log('env-saaf v1.3.0: all tests passed');
