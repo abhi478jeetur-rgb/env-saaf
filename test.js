@@ -927,4 +927,17 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #116: example --write refuses (exit 1) when no variables are found.
+{
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'env-saaf-empty-'));
+  const r = spawnSync('node', [path.join(__dirname, 'cli.js'), 'example', dir, '--write'], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 1);
+  assert.ok(/no process\.env usage found/.test(r.stderr));
+  assert.ok(!fs.existsSync(path.join(dir, '.env.example')));
+  const p = spawnSync('node', [path.join(__dirname, 'cli.js'), 'example', dir], { encoding: 'utf8' });
+  assert.strictEqual(p.status, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.3.0: all tests passed');

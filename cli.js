@@ -111,6 +111,10 @@ if (cmd === 'scan') {
   if (writeOpt === null) {
     console.log(lines.join('\n'));
   } else {
+    if (!used.length) {
+      console.error(`env-saaf: no process.env usage found in ${dir} — not writing ${writeOpt} (check the directory)`);
+      process.exit(1);
+    }
     const target = path.join(dir, writeOpt);
     if (fs.existsSync(target) && !forceOpt) {
       console.error(`env-saaf: ${writeOpt} already exists in ${dir} â€” pass --force to overwrite it`);
