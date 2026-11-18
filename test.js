@@ -139,7 +139,7 @@ assert.ok(!ex.includes('sk_live'));
   fs.writeFileSync(path.join(dir, 'b.cts'), 'export const y = process.env.FROM_CTS;');
   fs.writeFileSync(path.join(dir, 'c.ts'), 'export const z = process.env.FROM_TS;');
   assert.deepStrictEqual(scanDir(dir), ['FROM_CTS', 'FROM_MTS', 'FROM_TS']);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #14: parseEnvFile — strip inline comments after unquoted values;
@@ -163,7 +163,7 @@ assert.ok(!ex.includes('sk_live'));
   );
   assert.strictEqual(envInline.PORT, 4000);
   assert.strictEqual(envInline.DEBUG, true);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // feat: loadEnv — read a .env file and validate it in one call (fixes #2)
@@ -204,7 +204,7 @@ assert.ok(!ex.includes('sk_live'));
   // missing file + sab optional -> defaults, no throw
   const env4 = loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: path.join(dir, 'nope.env'), env: {} });
   assert.strictEqual(env4.PORT, 3000);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #83: reject a misplaced path or other non-schema argument up front.
@@ -263,14 +263,14 @@ assert.ok(!ex.includes('sk_live'));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cli-'));
   fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG;');
   fs.writeFileSync(path.join(dir, '.env.sample'), 'MY_FLAG=1\n');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   // --file .env.sample: everything is documented, exit 0 (must not throw)
   execFileSync('node', [cli, 'check', dir, '--file', '.env.sample'], { stdio: 'pipe' });
   // without --file: no .env.example present, exit 2
   let code = 0;
   try { execFileSync('node', [cli, 'check', dir], { stdio: 'pipe' }); } catch (e) { code = e.status; }
   assert.strictEqual(code, 2);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #102: CLI 'example --write' — save the draft to a file instead of printing it
@@ -281,13 +281,13 @@ assert.ok(!ex.includes('sk_live'));
   const { spawnSync } = require('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cli-'));
   fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG;');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
   // without --write: draft still goes to stdout and no file is created
   const plain = run(['example', dir]);
   assert.strictEqual(plain.status, 0);
   assert.ok(plain.stdout.includes('MY_FLAG='));
-  assert.ok(!fs.existsSync(path.join(dir, '.env.example')));
+  assert.ok(!require('node:fs').existsSync(require('node:path').join(dir, '.env.example')));
   // --write: draft lands in .env.example, with a confirmation on stdout
   const wrote = run(['example', dir, '--write']);
   assert.strictEqual(wrote.status, 0);
@@ -308,7 +308,7 @@ assert.ok(!ex.includes('sk_live'));
   const named = run(['example', dir, '--write=.env.local.example']);
   assert.strictEqual(named.status, 0);
   assert.ok(fs.readFileSync(path.join(dir, '.env.local.example'), 'utf8').includes('MY_FLAG='));
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #15: scanCode — let aur var destructuring of process.env (previously only const)
@@ -353,7 +353,7 @@ assert.ok(!ex.includes('sk_live'));
 {
   const { execFileSync } = require('node:child_process');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   // --help aur -h: exit 0, usage text stdout par
   const outHelp = execFileSync('node', [cli, '--help'], { encoding: 'utf8' });
   assert.ok(outHelp.includes('Usage: env-saaf'));
@@ -372,7 +372,7 @@ assert.ok(!ex.includes('sk_live'));
 {
   const { spawnSync } = require('node:child_process');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   for (const args of [
     ['scan', '--help'],
     ['check', '--help'],
@@ -393,7 +393,7 @@ assert.ok(!ex.includes('sk_live'));
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-plain-'));
 
   try {
@@ -428,7 +428,7 @@ assert.ok(!ex.includes('sk_live'));
 {
   const { spawnSync } = require('node:child_process');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   const expected = `env-saaf ${require('./package.json').version}\n`;
 
   const commands = [
@@ -455,7 +455,7 @@ assert.ok(!ex.includes('sk_live'));
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-json-'));
   fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MISSING_KEY;\nconst y = process.env.OK_KEY;');
@@ -488,7 +488,7 @@ assert.ok(!ex.includes('sk_live'));
   assert.ok(humanOut.includes('MISSING_KEY'));
   assert.ok(!humanOut.includes('{'));
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #100: CLI check also compares the real .env with the template keys.
@@ -497,7 +497,7 @@ assert.ok(!ex.includes('sk_live'));
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const cli = path.join(__dirname, 'cli.js');
+  const cli = require('node:path').join(__dirname, 'cli.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-envkeys-'));
 
   try {
@@ -574,7 +574,7 @@ assert.ok(!ex.includes('sk_live'));
       "const { QUEUE_NAME = 'default' } = process.env;",
       'export const config = { queue: QUEUE_NAME, tracing: process.env["TRACE_MODE"] } as const;',
     ].join('\n'));
-    const output = execFileSync(process.execPath, [path.join(__dirname, 'cli.js'), 'scan', dir, '--json'], {
+    const output = execFileSync(process.execPath, [require('node:path').join(__dirname, 'cli.js'), 'scan', dir, '--json'], {
       encoding: 'utf8',
     });
     assert.deepStrictEqual(JSON.parse(output), {
@@ -634,7 +634,7 @@ assert.deepStrictEqual(
   assert.strictEqual(merged.HOST, 'local');
   const viaArray = loadEnv({ HOST: { type: 'string' } }, { path: [f1, f2], env: {} });
   assert.strictEqual(viaArray.HOST, 'local');
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #34: per-key 'transform' — custom parsing after coercion
@@ -696,7 +696,7 @@ assert.deepStrictEqual(
     { path: path.join(dir, '.env'), env: {} }
   );
   assert.deepStrictEqual(loaded.ALLOWED_ORIGINS, ['a.com', 'b.com']);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #23: 'email' type and 'pattern' option for strings
@@ -907,7 +907,7 @@ assert.deepStrictEqual(
   );
   assert.strictEqual(t2.OBJ, '{"raw":"x"}');
   assert.deepStrictEqual(JSON.parse(t2.OBJ), { raw: 'x' });
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 // Issue #117: parseEnvFile — a backslash-escaped quote inside a quoted value
@@ -930,14 +930,14 @@ assert.deepStrictEqual(
 // Issue #116: example --write refuses (exit 1) when no variables are found.
 {
   const { spawnSync } = require('node:child_process');
-  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'env-saaf-empty-'));
-  const r = spawnSync('node', [path.join(__dirname, 'cli.js'), 'example', dir, '--write'], { encoding: 'utf8' });
+  const dir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'env-saaf-empty-'));
+  const r = spawnSync('node', [require('node:path').join(__dirname, 'cli.js'), 'example', dir, '--write'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 1);
   assert.ok(/no process\.env usage found/.test(r.stderr));
-  assert.ok(!fs.existsSync(path.join(dir, '.env.example')));
-  const p = spawnSync('node', [path.join(__dirname, 'cli.js'), 'example', dir], { encoding: 'utf8' });
+  assert.ok(!require('node:fs').existsSync(require('node:path').join(dir, '.env.example')));
+  const p = spawnSync('node', [require('node:path').join(__dirname, 'cli.js'), 'example', dir], { encoding: 'utf8' });
   assert.strictEqual(p.status, 0);
-  fs.rmSync(dir, { recursive: true, force: true });
+  require('node:fs').rmSync(dir, { recursive: true, force: true });
 }
 
 console.log('env-saaf v1.3.0: all tests passed');
