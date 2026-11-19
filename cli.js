@@ -58,6 +58,23 @@ for (let i = 1; i < argv.length; i++) {
 }
 const dir = positional[0] || process.cwd();
 
+// #133: every command's first job is to read the directory. A typo or a file path used to reach
+// readdirSync and print ENOENT/ENOTDIR, and `check` went looking for the template inside the file
+// first, so the message blamed the wrong thing. Say which argument is wrong, and exit 2 like the
+// other usage errors, before anything is read.
+function requireDirectory(directory) {
+  if (!fs.existsSync(directory)) {
+    console.error(`env-saaf: ${directory} does not exist`);
+    process.exit(2);
+  }
+  if (!fs.statSync(directory).isDirectory()) {
+    console.error(`env-saaf: ${directory} is not a directory`);
+    process.exit(2);
+  }
+}
+
+if (cmd === 'scan' || cmd === 'check' || cmd === 'example') requireDirectory(dir);
+
 if (cmd === 'scan') {
   const vars = scanDir(dir);
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.

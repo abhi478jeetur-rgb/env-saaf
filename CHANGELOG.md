@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `scan`, `check` and `example` now name a directory argument that is a file or does not exist — `env-saaf: <path> is not a directory` / `does not exist`, exit 2 — instead of letting `readdirSync` print an `ENOENT`/`ENOTDIR` stack trace; `check` no longer reports `.env.example not found in <file>` for a path that was never a directory (fixes #133)
 - Fixed: `validateEnv` now rejects an invalid schema up front, so a typo like `type: 'emial'` (or a non-RegExp `pattern`, non-function `transform`, and non-numeric `min`/`max`/length options) throws an error naming the key even when the variable is absent — previously an absent optional key skipped coercion and the typo passed silently (fixes #134)
 
 ## 1.4.0 — 2026-11-19

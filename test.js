@@ -1060,6 +1060,39 @@ assert.deepStrictEqual(
   assert.ok(!scanCode(own).includes('KEY'));
 }
 
+// Issue #133: a directory argument that is a file, or does not exist, is named as such — exit 2,
+// no readdirSync stack trace, and `check` doesn't blame the missing template inside the wrong path
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cli-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG;');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+  const missing = path.join(dir, 'no-such-subdir');
+  for (const command of ['scan', 'check', 'example']) {
+    // A file path: named, exit 2, and nothing from readdirSync leaks through.
+    const file = run([command, cli]);
+    assert.strictEqual(file.status, 2, `${command} <file> should exit 2: ${file.stderr}`);
+    assert.ok(file.stderr.includes(`${cli} is not a directory`), `${command} <file> stderr: ${file.stderr}`);
+    assert.ok(!/ENOENT|ENOTDIR|readdir/i.test(file.stderr + file.stdout), `${command} <file> must not leak fs errors`);
+    // `check` used to look for the template inside the file first and report ".env.example not found in <file>".
+    assert.ok(!file.stderr.includes('not found in'), `${command} <file> must not blame the template`);
+    // A path that doesn't exist: named, exit 2.
+    const gone = run([command, missing]);
+    assert.strictEqual(gone.status, 2, `${command} <missing> should exit 2: ${gone.stderr}`);
+    assert.ok(gone.stderr.includes(`${missing} does not exist`), `${command} <missing> stderr: ${gone.stderr}`);
+    assert.ok(!/ENOENT|ENOTDIR|readdir/i.test(gone.stderr + gone.stdout), `${command} <missing> must not leak fs errors`);
+  }
+  // An existing directory is untouched: scan still prints the variables, exit 0.
+  const normal = run(['scan', dir]);
+  assert.strictEqual(normal.status, 0, normal.stderr);
+  assert.ok(normal.stdout.includes('MY_FLAG'));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.4.0: all tests passed');
 
 // Issue #89: a missing template file must point at the command that drafts one,
