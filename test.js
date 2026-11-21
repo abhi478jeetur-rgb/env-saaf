@@ -2441,4 +2441,250 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #52: per-key `validate(value, env)` function for custom rules.
+{
+  // 1. Non-function `validate` is rejected up front in validateSchema,
+  // even when the key is absent/optional and even with throwOnError: false.
+  for (const bad of ['fn', 123, true, null, {}]) {
+    assert.throws(
+      () => validateEnv({ CUSTOM: { type: 'string', validate: bad } }, {}),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('CUSTOM: "validate" must be a function'),
+    );
+    assert.throws(
+      () => validateEnv({ CUSTOM: { type: 'string', validate: bad } }, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('CUSTOM: "validate" must be a function'),
+    );
+  }
+
+  // 2. Passing return values: true, undefined, null, and empty string.
+  const passRes = validateEnv(
+    {
+      A: { type: 'string', validate: () => true },
+      B: { type: 'string', validate: () => undefined },
+      C: { type: 'string', validate: () => null },
+      D: { type: 'string', validate: () => '' },
+    },
+    { A: 'a', B: 'b', C: 'c', D: 'd' },
+  );
+  assert.deepStrictEqual(passRes, { A: 'a', B: 'b', C: 'c', D: 'd' });
+
+  // 3. Failing return values: string message and boolean false.
+  assert.throws(
+    () => validateEnv(
+      { APP_PORT: { type: 'port', validate: v => v >= 1024 || 'must be an unprivileged port (>= 1024)' } },
+      { APP_PORT: '80' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'APP_PORT: must be an unprivileged port (>= 1024)',
+  );
+  assert.throws(
+    () => validateEnv(
+      { APP_PORT: { type: 'port', validate: v => v >= 1024 } },
+      { APP_PORT: '80' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'APP_PORT: failed custom validation, got "80"',
+  );
+
+  // 4. Receives coerced value and full env object (cross-key checks).
+  let seenVal, seenEnv;
+  const inputEnv = { PRIMARY_HOST: 'db1.internal', REPLICA_HOST: 'db2.internal', CONFIG: '{"retries":3}' };
+  const crossOk = validateEnv(
+    {
+      PRIMARY_HOST: { type: 'host', required: true },
+      REPLICA_HOST: {
+        type: 'host',
+        required: true,
+        validate: (v, e) => v !== e.PRIMARY_HOST || 'must differ from PRIMARY_HOST',
+      },
+      CONFIG: {
+        type: 'json',
+        validate: (v, e) => { seenVal = v; seenEnv = e; return v.retries > 0 || 'retries must be positive'; },
+      },
+    },
+    inputEnv,
+  );
+  assert.strictEqual(crossOk.REPLICA_HOST, 'db2.internal');
+  assert.deepStrictEqual(seenVal, { retries: 3 });
+  assert.strictEqual(seenEnv, inputEnv);
+
+  assert.throws(
+    () => validateEnv(
+      {
+        PRIMARY_HOST: { type: 'host', required: true },
+        REPLICA_HOST: {
+          type: 'host',
+          required: true,
+          validate: (v, e) => v !== e.PRIMARY_HOST || 'must differ from PRIMARY_HOST',
+        },
+      },
+      { PRIMARY_HOST: 'db1.internal', REPLICA_HOST: 'db1.internal' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'REPLICA_HOST: must differ from PRIMARY_HOST',
+  );
+
+  // 5. Throwing validator is reported as a validation failure, not a crash.
+  assert.throws(
+    () => validateEnv(
+      {
+        DIR: { type: 'string', validate: () => { throw new Error('directory does not exist'); } },
+        NON_ERR: { type: 'string', validate: () => { throw 'raw string throw'; } },
+      },
+      { DIR: '/nope', NON_ERR: 'x' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 2
+      && err.errors[0] === 'DIR: validation failed: directory does not exist'
+      && err.errors[1] === 'NON_ERR: validation failed: raw string throw',
+  );
+
+  // 6. Aggregated errors: built-in failures and custom validate failures collect together.
+  assert.throws(
+    () => validateEnv(
+      {
+        REQ: { type: 'string', required: true },
+        BAD_PORT: { type: 'port' },
+        CUSTOM_STR: { type: 'string', validate: () => 'custom reason' },
+        CUSTOM_FALSE: { type: 'int', validate: () => false },
+        CUSTOM_THROW: { type: 'string', validate: () => { throw new Error('boom'); } },
+      },
+      { BAD_PORT: 'nope', CUSTOM_STR: 'a', CUSTOM_FALSE: '7', CUSTOM_THROW: 'b' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 5
+      && err.errors[0] === 'REQ: missing required variable'
+      && err.errors[1].startsWith('BAD_PORT: expected a port')
+      && err.errors[2] === 'CUSTOM_STR: custom reason'
+      && err.errors[3] === 'CUSTOM_FALSE: failed custom validation, got "7"'
+      && err.errors[4] === 'CUSTOM_THROW: validation failed: boom',
+  );
+
+  // 7. Execution order:
+  // - skipped for missing optional keys and when coercion/built-in checks fail
+  // - runs before transform; transform is skipped when validate fails
+  // - runs on defaults (while transform is still skipped on defaults)
+  let calledOnMissing = false;
+  let calledAfterBadCoercion = false;
+  let calledAfterBadBuiltin = false;
+  validateEnv(
+    { OPT: { type: 'string', validate: () => { calledOnMissing = true; return true; } } },
+    {},
+  );
+  assert.strictEqual(calledOnMissing, false);
+
+  assert.throws(
+    () => validateEnv(
+      {
+        N: { type: 'int', validate: () => { calledAfterBadCoercion = true; return true; } },
+        M: { type: 'int', min: 10, validate: () => { calledAfterBadBuiltin = true; return true; } },
+      },
+      { N: 'abc', M: '5' },
+    ),
+    err => err instanceof EnvSaafError && err.errors.length === 2,
+  );
+  assert.strictEqual(calledAfterBadCoercion, false);
+  assert.strictEqual(calledAfterBadBuiltin, false);
+
+  const order = [];
+  const transformedRes = validateEnv(
+    {
+      LIST: {
+        type: 'string',
+        validate: v => { order.push(['validate', v]); return v.includes(',') || 'needs comma'; },
+        transform: v => { order.push(['transform', v]); return v.split(','); },
+      },
+    },
+    { LIST: 'a,b' },
+  );
+  assert.deepStrictEqual(transformedRes.LIST, ['a', 'b']);
+  assert.deepStrictEqual(order, [['validate', 'a,b'], ['transform', 'a,b']]);
+
+  let transformCalledAfterFail = false;
+  assert.throws(
+    () => validateEnv(
+      {
+        LIST: {
+          type: 'string',
+          validate: () => 'bad list',
+          transform: v => { transformCalledAfterFail = true; return v.split(','); },
+        },
+      },
+      { LIST: 'a' },
+    ),
+    err => err instanceof EnvSaafError && err.errors[0] === 'LIST: bad list',
+  );
+  assert.strictEqual(transformCalledAfterFail, false);
+
+  let defaultTransformCalled = false;
+  const defaultOk = validateEnv(
+    {
+      PORT: {
+        type: 'port',
+        default: 8080,
+        validate: v => v >= 1024 || 'too low',
+        transform: v => { defaultTransformCalled = true; return v; },
+      },
+    },
+    {},
+  );
+  assert.strictEqual(defaultOk.PORT, 8080);
+  assert.strictEqual(defaultTransformCalled, false);
+
+  assert.throws(
+    () => validateEnv(
+      { PORT: { type: 'port', default: 80, validate: v => v >= 1024 || 'default too low' } },
+      {},
+    ),
+    err => err instanceof EnvSaafError && err.errors[0] === 'PORT: default too low',
+  );
+
+  // 8. `sensitive: true` masks values across false, string, and thrown validate errors.
+  const secret = 'sess_secret_token_99';
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: () => false } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: failed custom validation, got "${maskValue(secret)}"`,
+  );
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: v => `rejected ${v}` } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: rejected ${maskValue(secret)}`,
+  );
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: v => { throw new Error(`bad ${v}`); } } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: validation failed: bad ${maskValue(secret)}`,
+  );
+
+  // 9. Non-throwing mode collects validate errors and omits failing keys from env.
+  const collected = validateEnv(
+    {
+      GOOD: { type: 'int', validate: v => v > 0 },
+      BAD: { type: 'int', validate: v => v > 10 || 'must exceed 10' },
+    },
+    { GOOD: '5', BAD: '3' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(collected.env, { GOOD: 5 });
+  assert.deepStrictEqual(collected.errors, ['BAD: must exceed 10']);
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

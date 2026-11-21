@@ -56,6 +56,9 @@ function validateSchema(schema) {
     if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
       errors.push(`${key}: "pattern" must be a RegExp`);
     }
+    if (rule.validate !== undefined && typeof rule.validate !== 'function') {
+      errors.push(`${key}: "validate" must be a function`);
+    }
     if (rule.transform !== undefined && typeof rule.transform !== 'function') {
       errors.push(`${key}: "transform" must be a function`);
     }
@@ -313,6 +316,15 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false) {
   }
 }
 
+function maskSensitiveMessage(msg, raw, val, sensitive) {
+  if (!sensitive) return msg;
+  const rawStr = String(raw);
+  if (rawStr) msg = msg.split(rawStr).join(maskValue(rawStr));
+  const valStr = String(val);
+  if (valStr && valStr !== rawStr) msg = msg.split(valStr).join(maskValue(valStr));
+  return msg;
+}
+
 function validateEnv(schema, env = process.env, options = {}) {
   const out = {}; const errors = [];
   // Reject a malformed schema before looking at any values, so a typo on an
@@ -404,7 +416,32 @@ function validateEnv(schema, env = process.env, options = {}) {
           continue;
         }
       }
-      // transform: one custom step after coercion and the choices check.
+      // validate: custom rule run after coercion and built-in checks (including
+      // on defaults), before transform (issue #52). Receives (value, env);
+      // return true/undefined/null to pass, false for a generic error, or a
+      // non-empty string error message to fail. A thrown error is collected
+      // like any other validation failure, naming the key.
+      if (rule.validate !== undefined) {
+        let valid;
+        try {
+          valid = rule.validate(val, env);
+        } catch (e) {
+          const rawMsg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+          const msg = maskSensitiveMessage(rawMsg, raw, val, sensitive);
+          errors.push(`${key}: validation failed: ${msg}`);
+          continue;
+        }
+        if (valid === false) {
+          errors.push(`${key}: failed custom validation, got "${shown}"`);
+          continue;
+        }
+        if (typeof valid === 'string' && valid.length > 0) {
+          const msg = maskSensitiveMessage(valid, raw, val, sensitive);
+          errors.push(`${key}: ${msg}`);
+          continue;
+        }
+      }
+      // transform: one custom step after coercion and all validation checks.
       // It runs only on values actually provided (not on defaults, which are
       // still coerced and validated). A
       // throwing transform is collected like any other validation error,
@@ -417,13 +454,7 @@ function validateEnv(schema, env = process.env, options = {}) {
         try {
           out[key] = rule.transform(val);
         } catch (e) {
-          let msg = e.message;
-          if (sensitive) {
-            const rawStr = String(raw);
-            if (rawStr) msg = msg.split(rawStr).join(maskValue(rawStr));
-            const valStr = String(val);
-            if (valStr && valStr !== rawStr) msg = msg.split(valStr).join(maskValue(valStr));
-          }
+          const msg = maskSensitiveMessage(e.message, raw, val, sensitive);
           errors.push(`${key}: transform failed: ${msg}`);
         }
         continue;

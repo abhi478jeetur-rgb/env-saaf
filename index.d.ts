@@ -44,6 +44,14 @@ export interface EnvRule {
    */
   pattern?: RegExp;
   /**
+   * Custom validation rule run after coercion and built-in checks, before
+   * `transform`. Receives the coerced value and the input `env` object.
+   * Return `true` (or `undefined`/`null`) to pass, `false` for a generic
+   * error, or a non-empty string error message to fail. A thrown error is
+   * collected as a validation failure naming the key.
+   */
+  validate?: (value: any, env: Record<string, string | undefined>) => boolean | string | void | null;
+  /**
    * Custom step applied after coercion and the `choices` check; its return
    * value is what lands in the result (e.g. split a comma list into an
    * array). Runs only on values actually provided, not on `default`s.
