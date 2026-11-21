@@ -56,6 +56,12 @@ export interface EnvRule {
    * Only affects string-like types; numbers and booleans are unaffected.
    */
   trim?: boolean;
+  /**
+   * Always mask this key's value in validation errors and CLI output, even
+   * when its name does not look like a secret (e.g. `SESSION_ID`, `LICENSE_KEY`).
+   * Also leaves its placeholder empty in `generateExample`. Default is false.
+   */
+  sensitive?: boolean;
 }
 
 export type EnvSchema = Record<string, EnvRule>;

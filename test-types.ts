@@ -12,7 +12,7 @@ const env = validateEnv({
   MODE: { type: 'string', default: 'dev' },
   NAME: { type: 'string' },
   TENANT_ID: { type: 'uuid', required: true },
-  API_HASH: { type: 'hex' },
+  API_HASH: { type: 'hex', sensitive: true },
 });
 
 // required keys: exact types

@@ -2138,4 +2138,174 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #54: `sensitive: true` masks a key's value in all validation errors
+// and CLI output, even when its name does not look like a secret.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+
+  // 1. Invalid non-boolean `sensitive` option is rejected up front even when absent.
+  for (const bad of ['true', 1, 0, null, {}]) {
+    assert.throws(
+      () => validateEnv({ SESSION_ID: { type: 'string', sensitive: bad } }, {}),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('SESSION_ID: "sensitive" must be a boolean'),
+    );
+  }
+
+  // 2. Coercion errors across types never leak the raw value when sensitive: true.
+  const coercionCases = [
+    ['email', 'not-an-email-secret99'],
+    ['number', 'not-a-number-secret99'],
+    ['int', 'not-an-int-secret99'],
+    ['json', '{bad-json-secret99'],
+    ['boolean', 'not-a-bool-secret99'],
+    ['url', 'not-a-url-secret99'],
+    ['file', path.join(os.tmpdir(), 'env-saaf-missing-secret-file-99999')],
+    ['uuid', 'not-a-uuid-secret99'],
+    ['hex', 'not-hex-secret99'],
+    ['ipv4', '999.999.999.999'],
+    ['semver', 'v-secret-1.2.3'],
+    ['base64', 'not*base64*secret99'],
+    ['date', 'not-a-date-secret99'],
+    ['duration', 'not-a-duration-secret99'],
+    ['host', 'https://secret-host.internal/path'],
+    ['port', '99999'],
+  ];
+  for (const [type, raw] of coercionCases) {
+    assert.throws(
+      () => validateEnv({ SESSION_ID: { type, sensitive: true } }, { SESSION_ID: raw }),
+      err => err instanceof EnvSaafError
+        && !err.message.includes(raw)
+        && err.errors[0].includes(`got "${maskValue(raw)}"`),
+      `expected masked error for type "${type}"`,
+    );
+  }
+  // URL protocols mismatch also masks sensitive values.
+  const badProtoUrl = 'http://secret-token-host.internal/callback';
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'url', protocols: ['https'], sensitive: true } }, { SESSION_ID: badProtoUrl }),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(badProtoUrl)
+      && err.errors[0].includes(`got "${maskValue(badProtoUrl)}"`),
+  );
+
+  // 3. Post-coercion rule checks (min/max, minLength/maxLength, length, choices, pattern, transform).
+  assert.throws(
+    () => validateEnv({ LICENSE_KEY: { type: 'int', min: 100000, sensitive: true } }, { LICENSE_KEY: '12345' }),
+    err => err instanceof EnvSaafError && !err.message.includes('12345') && err.errors[0].includes('got "12***45"'),
+  );
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'string', minLength: 30, sensitive: true } }, { SESSION_ID: 'sess_secret_99' }),
+    err => err instanceof EnvSaafError && !err.message.includes('sess_secret_99') && err.errors[0].includes('got "se***99"'),
+  );
+  assert.throws(
+    () => validateEnv({ LICENSE_KEY: { type: 'hex', length: 32, sensitive: true } }, { LICENSE_KEY: 'deadbeef1234' }),
+    err => err instanceof EnvSaafError && !err.message.includes('deadbeef1234') && err.errors[0].includes('got "de***34"'),
+  );
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'string', choices: ['alpha', 'beta'], sensitive: true } }, { SESSION_ID: 'secret_gamma_99' }),
+    err => err instanceof EnvSaafError && !err.message.includes('secret_gamma_99') && err.errors[0].includes('got "se***99"'),
+  );
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'string', pattern: /^sid_/, sensitive: true } }, { SESSION_ID: 'raw_secret_token_99' }),
+    err => err instanceof EnvSaafError && !err.message.includes('raw_secret_token_99') && err.errors[0].includes('got "ra***99"'),
+  );
+  // Throwing transform that echoes the value still does not leak the raw value.
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, transform: v => { throw new Error(`bad token ${v}`); } } },
+      { SESSION_ID: 'raw_secret_token_99' },
+    ),
+    err => err instanceof EnvSaafError && !err.message.includes('raw_secret_token_99') && err.errors[0].includes('ra***99'),
+  );
+
+  // 4. Short sensitive values mask to '****' without leaking.
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'int', sensitive: true } }, { SESSION_ID: 'bad!' }),
+    err => err instanceof EnvSaafError && !err.message.includes('bad!') && err.errors[0].includes('got "****"'),
+  );
+
+  // 5. Valid sensitive values return the real unmasked value.
+  const okRes = validateEnv(
+    { SESSION_ID: { type: 'string', pattern: /^sid_/, sensitive: true } },
+    { SESSION_ID: 'sid_real_value_123' },
+  );
+  assert.strictEqual(okRes.SESSION_ID, 'sid_real_value_123');
+
+  // 6. Non-throwing mode masks sensitive values in errors too.
+  const nonThrow = validateEnv(
+    { SESSION_ID: { type: 'uuid', sensitive: true } },
+    { SESSION_ID: 'sess_raw_secret_42' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(nonThrow.env, {});
+  assert.strictEqual(nonThrow.errors.length, 1);
+  assert.ok(!nonThrow.errors[0].includes('sess_raw_secret_42'));
+  assert.ok(nonThrow.errors[0].includes('got "se***42"'));
+
+  // 7. Non-sensitive control: sensitive omitted or false behaves identically to before.
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'int' } }, { SESSION_ID: 'not-an-int-plain99' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer (e.g. 42), got "not-an-int-plain99"',
+  );
+  assert.throws(
+    () => validateEnv({ SESSION_ID: { type: 'int', sensitive: false } }, { SESSION_ID: 'not-an-int-plain99' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer (e.g. 42), got "not-an-int-plain99"',
+  );
+
+  // 8. maskSecrets masks innocuously-named keys as well.
+  assert.deepStrictEqual(
+    maskSecrets({ SESSION_ID: 'sess_raw_secret_42', LICENSE_KEY: 'lic_99887766' }),
+    { SESSION_ID: 'se***42', LICENSE_KEY: 'li***66' },
+  );
+
+  // 9. generateExample leaves sensitive keys empty (unless default is set),
+  // while non-sensitive innocuously-named keys keep their placeholder.
+  const exSens = generateExample({
+    SESSION_ID: { type: 'string', required: true, sensitive: true },
+    PLAIN_ID: { type: 'string', required: true },
+    SENS_DEFAULT: { type: 'string', sensitive: true, default: 'dev-placeholder' },
+  });
+  assert.match(exSens, /^SESSION_ID=$/m);
+  assert.match(exSens, /^PLAIN_ID=your_value_here$/m);
+  assert.match(exSens, /^SENS_DEFAULT=dev-placeholder$/m);
+
+  // 10. loadEnv and CLI `check --schema` (text and --json) mask sensitive values.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-sensitive-'));
+  try {
+    const envFile = path.join(dir, '.env');
+    const exampleFile = path.join(dir, '.env.example');
+    const schemaFile = path.join(dir, 'env.schema.js');
+    const secretVal = 'lic_super_secret_987654';
+    fs.writeFileSync(envFile, `SESSION_ID=${secretVal}\n`);
+    fs.writeFileSync(exampleFile, 'SESSION_ID=\n');
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const s = process.env.SESSION_ID;\n');
+    fs.writeFileSync(schemaFile, "module.exports = { SESSION_ID: { type: 'uuid', required: true, sensitive: true } };\n");
+
+    assert.throws(
+      () => loadEnv({ SESSION_ID: { type: 'uuid', required: true, sensitive: true } }, { path: envFile, env: {} }),
+      err => err instanceof EnvSaafError && !err.message.includes(secretVal) && err.errors[0].includes('got "li***54"'),
+    );
+
+    const cli = path.join(__dirname, 'cli.js');
+    const textRun = spawnSync('node', [cli, 'check', dir, '--schema', './env.schema.js'], { encoding: 'utf8' });
+    assert.strictEqual(textRun.status, 1);
+    assert.ok(!textRun.stdout.includes(secretVal) && !textRun.stderr.includes(secretVal), textRun.stdout + textRun.stderr);
+    assert.ok(textRun.stdout.includes('INVALID: SESSION_ID:') && textRun.stdout.includes('got "li***54"'), textRun.stdout);
+
+    const jsonRun = spawnSync('node', [cli, 'check', dir, '--schema', './env.schema.js', '--json'], { encoding: 'utf8' });
+    assert.strictEqual(jsonRun.status, 1);
+    assert.ok(!jsonRun.stdout.includes(secretVal) && !jsonRun.stderr.includes(secretVal), jsonRun.stdout + jsonRun.stderr);
+    const parsed = JSON.parse(jsonRun.stdout.trim());
+    assert.strictEqual(parsed.ok, false);
+    assert.ok(parsed.invalid[0].includes('got "li***54"'), parsed.invalid[0]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log('env-saaf v1.5.0: all tests passed');
