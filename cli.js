@@ -6,7 +6,9 @@
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --schema also validates the values
  *                           of the real .env file against the schema the file exports
- *                           (issue #90); --json emits machine-readable output.
+ *                           (issue #90); --json emits machine-readable output. A scaffold
+ *                           with no code usage yet passes with a single note instead of
+ *                           one UNUSED line per key (issue #170).
  *   env-saaf scan  [dir] [--file name] [--json]  — just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
@@ -16,7 +18,9 @@
  *   env-saaf init  [dir] [--schema file] [--force] — write a starter env.schema.js
  *                           (commented examples of the main types) and a matching
  *                           .env.example generated from it; refuses to overwrite
- *                           either file unless --force is passed (issue #60)
+ *                           either file unless --force is passed (issue #60). In a
+ *                           "type": "module" project the starter is env.schema.cjs
+ *                           instead, so it still loads with require() (issue #184)
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -129,6 +133,34 @@ function readEnvFile(filePath) {
   }
 }
 
+// Issue #184: would Node treat this schema file as an ES module? A .js file
+// is ESM when the nearest package.json above it says "type": "module"
+// (a .mjs file always is, a .cjs file never is). A schema Node treats as ESM
+// cannot be loaded with require() — the generated `module.exports` starter
+// throws `ReferenceError: module is not defined` — so callers check this
+// before writing or loading anything.
+function schemaIsEsm(schemaPath) {
+  const ext = path.extname(schemaPath);
+  if (ext === '.mjs') return true;
+  if (ext === '.cjs') return false;
+  // Callers pass an already-resolved path; resolve it again would break
+  // callers that stub path.resolve (see the #169 Windows-path test).
+  let d = path.dirname(schemaPath);
+  for (;;) {
+    const pkgPath = path.join(d, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).type === 'module';
+      } catch {
+        return false;
+      }
+    }
+    const parent = path.dirname(d);
+    if (parent === d) return false;
+    d = parent;
+  }
+}
+
 if (cmd === 'scan') {
   const vars = scanDir(dir);
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
@@ -189,7 +221,14 @@ if (cmd === 'scan') {
       // Like --file, a relative schema path is relative to the checked directory.
       schema = require(path.resolve(dir, schemaOpt));
     } catch (e) {
-      const message = `env-saaf: cannot load schema ${schemaOpt}: ${e.message}`;
+      // Issue #184: when the schema file is one Node treats as an ES module,
+      // say so plainly and name the fix instead of surfacing the raw
+      // `ReferenceError: module is not defined` text.
+      let detail = e.message;
+      if (/ES module|module is not defined/.test(e.message)) {
+        detail += ' — in a "type": "module" project the schema must be a .cjs file (e.g. env.schema.cjs)';
+      }
+      const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
       if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
       else console.error(message);
       process.exit(2);
@@ -211,18 +250,31 @@ if (cmd === 'scan') {
       }
     }
   }
-  const ok = usedNotDocumented.length === 0 && documentedNotUsed.length === 0
-    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0;
+  // Issue #170: a fresh scaffold has no code using any variable yet, so every
+  // documented key looks UNUSED. That is the scaffold waiting for code, not
+  // drift in an established project — report it as one plain note and pass
+  // instead of failing on one UNUSED line per key. The exception only fires
+  // when UNUSED is the *only* finding: any MISSING, EXTRA or INVALID still
+  // fails the check exactly as before (#113 is unchanged for a project that
+  // already reads at least one variable).
+  const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
+    && usedNotDocumented.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0;
+  const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
+  const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
+    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0);
   if (jsonMode) {
     const result = {
       ok,
       missing: usedNotDocumented,
-      extra: documentedNotUsed,
+      extra: scaffoldAhead ? [] : documentedNotUsed,
       invalid,
       envExtra,
       envMissing,
     };
+    if (scaffoldAhead) result.note = scaffoldNote;
     console.log(JSON.stringify(result));
+  } else if (scaffoldAhead) {
+    console.log(`env-saaf: ${scaffoldNote}.`);
   } else {
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
@@ -265,8 +317,17 @@ if (cmd === 'scan') {
   // project starts from a working baseline instead of a blank file. Both
   // files are checked before either is written, so a refusal never leaves a
   // half-written pair behind, and --force is required to overwrite either.
-  const schemaName = schemaOpt || 'env.schema.js';
+  // Issue #184: in an ES module project the default starter is env.schema.cjs
+  // — a .js starter there would be treated as ESM and the require() below
+  // would throw a raw stack trace. An explicit --schema name that Node would
+  // treat as ESM is refused up front, before anything is written.
+  let schemaName = schemaOpt || 'env.schema.js';
+  if (!schemaOpt && schemaIsEsm(path.resolve(dir, schemaName))) schemaName = 'env.schema.cjs';
   const schemaPath = path.resolve(dir, schemaName);
+  if (schemaOpt && schemaIsEsm(schemaPath)) {
+    console.error(`env-saaf: schema ${schemaName} would be treated as an ES module in this project — use a .cjs file instead (e.g. --schema env.schema.cjs)`);
+    process.exit(2);
+  }
   const existing = [schemaName, '.env.example'].filter(n => fs.existsSync(path.join(dir, n)));
   if (existing.length && !forceOpt) {
     const verb = existing.length === 1 ? 'already exists' : 'already exist';

@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Docs: add Bun and Deno usage examples to README, covering `bun add`, CommonJS/ESM imports, Deno's `npm:` specifier, and Deno permission flags (fixes #177).
+- Added: every built-in type's validation error message now includes an example of the expected format (e.g. `expected a valid URL (e.g. https://example.com), got "..."` and `expected a port (0-65535, e.g. 3000), got "..."`), keeping aggregated errors one concise bullet per key (fixes #58)
+- Fixed: `init` in a `"type": "module"` project no longer crashes with a raw stack trace — the starter schema is written as `env.schema.cjs` instead of `env.schema.js`, and an explicit `--schema` file Node would treat as an ES module is refused up front with a clear error before anything is written; `check --schema` names the same fix when a schema fails to load as an ES module (fixes #184).
+- Fixed: `parseEnvFile` interpolation uses a self-reference's default — `A=${A:-fallback}` now resolves to `fallback` (`:-` and `-` behave the same), because a key's own value is not set while its own line is being resolved, exactly as for a genuinely absent name; a self-reference without an operator (`A=${A}`) and genuine cycles (`A=${B}`, `B=${A}`) stay literal as before (fixes #185).
+- Fixed: the first `check` after `init` no longer fails on one UNUSED line per scaffolded key — when no code reads any variable yet, the check passes with a single note saying the scaffold is ahead of the code; once code reads at least one variable, unused keys fail the run exactly as before, and any MISSING, EXTRA or INVALID finding still fails (fixes #170, fixes #178).
 - Fixed: Reject non-finite values and overflowing exponent literals in numeric configuration (fixes #175).
 - Docs: add a runnable Docker and Docker Compose startup validation example explaining `ENV`, `--env-file`, and Compose `environment:` (fixes #66).
 - Added: the `duration` type accepts `w` for weeks (`1w` = 7 days = 604,800,000 ms); like the other units it is case-insensitive and takes decimals (`1.5w`), and the error message now lists `1w` among the examples (fixes #176)

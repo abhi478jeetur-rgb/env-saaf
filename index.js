@@ -17,12 +17,30 @@ class EnvSaafError extends Error {
   }
 }
 
-// The types coerce() knows how to handle. Kept in one place so schema
-// validation and coercion cannot drift apart when a new type is added.
-const KNOWN_TYPES = new Set([
-  'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
-  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file', 'duration', 'host',
-]);
+// Format examples per built-in type, kept in one place so every type's error
+// message shows an example and schema validation cannot drift apart from
+// coercion when a new type is added (issue #58).
+const TYPE_EXAMPLES = {
+  string: 'hello',
+  email: 'user@example.com',
+  number: '3.14',
+  int: '42',
+  json: '{"key":"value"}',
+  boolean: 'true/false, yes/no, on/off, 1/0, y/n',
+  url: 'https://example.com',
+  uuid: '550e8400-e29b-41d4-a716-446655440000',
+  hex: 'deadbeef',
+  ipv4: '192.168.0.1',
+  semver: '1.2.3',
+  base64: 'aGVsbG8=',
+  port: '3000',
+  date: '2026-01-31',
+  file: './config.json',
+  duration: '500ms, 30s, 15m, 2h, 1d, 1w',
+  host: 'db.internal, localhost, 10.0.0.5',
+};
+
+const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
@@ -85,7 +103,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       if (at <= 0 || at !== s.lastIndexOf('@') || at === s.length - 1
         || !s.slice(at + 1).includes('.') || s.slice(at + 1).startsWith('.')
         || s.slice(at + 1).endsWith('.') || /\s/.test(s)) {
-        throw new Error(`${key}: expected a valid email address, got "${raw}"`);
+        throw new Error(`${key}: expected a valid email address (e.g. ${TYPE_EXAMPLES.email}), got "${raw}"`);
       }
       return s;
     }
@@ -94,14 +112,14 @@ function coerce(key, raw, type, trim = true, protocols) {
       // exponent overflow like '1e999'): Number() parses them without error,
       // and a silent Infinity breaks downstream maths (issue #175).
       const n = Number(v);
-      if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
+      if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${raw}"`);
       return n;
     }
     case 'int': {
       // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
       // it passes; '3.5', 'abc', and non-finite values ('Infinity', '1e999') do not.
       const n = Number(v);
-      if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer, got "${raw}"`);
+      if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${raw}"`);
       return n;
     }
     case 'json': {
@@ -111,14 +129,14 @@ function coerce(key, raw, type, trim = true, protocols) {
       // in the env argument) is already parsed, so it passes through.
       if (typeof v !== 'string') return v;
       try { return JSON.parse(v); }
-      catch { throw new Error(`${key}: expected valid JSON, got "${raw}"`); }
+      catch { throw new Error(`${key}: expected valid JSON (e.g. ${TYPE_EXAMPLES.json}), got "${raw}"`); }
     }
     case 'boolean': {
       if (typeof v === 'boolean') return v;
       const s = String(v).trim().toLowerCase();
       if (['true', '1', 'yes', 'on', 'y'].includes(s)) return true;
       if (['false', '0', 'no', 'off', 'n'].includes(s)) return false;
-      throw new Error(`${key}: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "${raw}"`);
+      throw new Error(`${key}: expected a boolean (e.g. ${TYPE_EXAMPLES.boolean}), got "${raw}"`);
     }
     case 'url': {
       // Validate only — never modify: new URL(...).toString() normalizes
@@ -126,7 +144,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       // the user's string comparisons.
       let parsed;
       try { parsed = new URL(String(v)); }
-      catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
+      catch { throw new Error(`${key}: expected a valid URL (e.g. ${TYPE_EXAMPLES.url}), got "${raw}"`); }
       // Issue #50: `protocols` allowlists the schemes (e.g. ['https']).
       // Schemes compare case-insensitively, with or without a trailing ':'.
       if (Array.isArray(protocols)) {
@@ -150,14 +168,14 @@ function coerce(key, raw, type, trim = true, protocols) {
       } catch {
         // Report the variable and its path consistently for filesystem failures.
       }
-      throw new Error(`${key}: expected a readable file, got "${s}"`);
+      throw new Error(`${key}: expected a readable file (e.g. ${TYPE_EXAMPLES.file}), got "${s}"`);
     }
     case 'uuid': {
       // Canonical UUID: 8-4-4-4-12 hex groups. Upper- and lowercase hex
       // are both accepted, and the value is returned exactly as provided.
       const s = String(v);
       if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s)) {
-        throw new Error(`${key}: expected a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got "${raw}"`);
+        throw new Error(`${key}: expected a valid UUID (e.g. ${TYPE_EXAMPLES.uuid}), got "${raw}"`);
       }
       return s;
     }
@@ -166,7 +184,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       // value never reaches here (it counts as missing), so '+' is right.
       const s = String(v);
       if (!/^[0-9a-fA-F]+$/.test(s)) {
-        throw new Error(`${key}: expected a hexadecimal string, got "${raw}"`);
+        throw new Error(`${key}: expected a hexadecimal string (e.g. ${TYPE_EXAMPLES.hex}), got "${raw}"`);
       }
       return s;
     }
@@ -178,7 +196,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       const parts = s.split('.');
       const badOctet = parts.some(p => !/^(0|[1-9][0-9]*)$/.test(p) || Number(p) > 255);
       if (parts.length !== 4 || badOctet) {
-        throw new Error(`${key}: expected a valid IPv4 address (e.g. 192.168.0.1), got "${raw}"`);
+        throw new Error(`${key}: expected a valid IPv4 address (e.g. ${TYPE_EXAMPLES.ipv4}), got "${raw}"`);
       }
       return s;
     }
@@ -188,7 +206,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       // allowed (1.2.3-beta.1, 1.2.3+build.5). Returned unchanged.
       const s = String(v);
       if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
-        throw new Error(`${key}: expected a valid semantic version (e.g. 1.2.3), got "${raw}"`);
+        throw new Error(`${key}: expected a valid semantic version (e.g. ${TYPE_EXAMPLES.semver}), got "${raw}"`);
       }
       return s;
     }
@@ -198,7 +216,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       // value is returned unchanged.
       const s = String(v);
       if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s) || s.length === 0) {
-        throw new Error(`${key}: expected a valid base64 string, got "${raw}"`);
+        throw new Error(`${key}: expected a valid base64 string (e.g. ${TYPE_EXAMPLES.base64}), got "${raw}"`);
       }
       return s;
     }
@@ -211,13 +229,13 @@ function coerce(key, raw, type, trim = true, protocols) {
       // (leap years included). A Date passed directly (e.g. as a default)
       // passes through when it is valid.
       if (v instanceof Date) {
-        if (Number.isNaN(v.getTime())) throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+        if (Number.isNaN(v.getTime())) throw new Error(`${key}: expected a valid ISO 8601 date (e.g. ${TYPE_EXAMPLES.date}), got "${raw}"`);
         return v;
       }
       const s = String(v);
       const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(s);
       if (!m) {
-        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. ${TYPE_EXAMPLES.date}), got "${raw}"`);
       }
       const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
       const hour = m[4] === undefined ? 0 : Number(m[4]);
@@ -227,11 +245,11 @@ function coerce(key, raw, type, trim = true, protocols) {
       const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
       if (month < 1 || month > 12 || day < 1 || day > (daysInMonth || 0)
         || hour > 23 || minute > 59 || second > 59) {
-        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. ${TYPE_EXAMPLES.date}), got "${raw}"`);
       }
       const d = new Date(s);
       if (Number.isNaN(d.getTime())) {
-        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. ${TYPE_EXAMPLES.date}), got "${raw}"`);
       }
       return d;
     }
@@ -243,19 +261,19 @@ function coerce(key, raw, type, trim = true, protocols) {
       // default) is taken as milliseconds, like the number type.
       if (typeof v === 'number') {
         if (!Number.isFinite(v) || v < 0) {
-          throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
+          throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${raw}"`);
         }
         return v;
       }
       const s = String(v).trim();
       const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)?$/i.exec(s);
       if (!m) {
-        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
+        throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${raw}"`);
       }
       const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[m[2] ? m[2].toLowerCase() : 'ms'];
       const ms = Number(m[1]) * mult;
       if (!Number.isFinite(ms)) {
-        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
+        throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${raw}"`);
       }
       return ms;
     }
@@ -267,14 +285,14 @@ function coerce(key, raw, type, trim = true, protocols) {
       // address; anything else with a colon is host:port and is rejected.
       const s = String(v);
       if (s.includes('://') || s.includes('/')) {
-        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+        throw new Error(`${key}: expected a hostname or IP address (e.g. ${TYPE_EXAMPLES.host}), got "${raw}"`);
       }
       if (net.isIP(s) === 6 || net.isIP(s) === 4) return s;
       if (s.includes(':')) {
-        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+        throw new Error(`${key}: expected a hostname or IP address (e.g. ${TYPE_EXAMPLES.host}), got "${raw}"`);
       }
       if (!/^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(s)) {
-        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+        throw new Error(`${key}: expected a hostname or IP address (e.g. ${TYPE_EXAMPLES.host}), got "${raw}"`);
       }
       return s;
     }
@@ -283,7 +301,7 @@ function coerce(key, raw, type, trim = true, protocols) {
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
         && (typeof v !== 'string' || v.trim() === '');
       if (zeroWithoutValue || !Number.isInteger(n) || n < 0 || n > 65535) {
-        throw new Error(`${key}: expected a port (0-65535), got "${raw}"`);
+        throw new Error(`${key}: expected a port (0-65535, e.g. ${TYPE_EXAMPLES.port}), got "${raw}"`);
       }
       return n;
     }
@@ -581,7 +599,7 @@ function parseEnvFile(text) {
   const ESC = String.fromCharCode(92) + '${';
   const PH = String.fromCharCode(1);
   const openRef = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|(?=\}))/g;
-  const expandRefs = (text, remaining) => {
+  const expandRefs = (text, remaining, self) => {
     let result = '';
     let cursor = 0;
     for (const match of text.matchAll(openRef)) {
@@ -600,11 +618,16 @@ function parseEnvFile(text) {
       }
       if (end === text.length) break; // Leave an unterminated reference literal.
 
-      const value = Object.prototype.hasOwnProperty.call(raw, name)
-        ? raw[name].split(ESC).join(PH)
-        : process.env[name];
+      // While the line that sets `self` is being resolved, its own value is
+      // not set yet (#185): with a `:-`/`-` operator present, the reference
+      // falls back to the default instead of re-reading the unresolved raw
+      // text. Without an operator the raw text is read, as before.
+      const value = name === self && operator ? undefined
+        : Object.prototype.hasOwnProperty.call(raw, name)
+          ? raw[name].split(ESC).join(PH)
+          : process.env[name];
       const useDefault = operator && (value === undefined
-        || (operator === ':-' && expandValue(value, remaining) === ''));
+        || (operator === ':-' && expandValue(value, remaining, self) === ''));
       result += text.slice(cursor, match.index) + (useDefault
         ? text.slice(start, end)
         : (value ?? ''));
@@ -613,9 +636,9 @@ function parseEnvFile(text) {
     return result + text.slice(cursor);
   };
   // Share the existing five-round budget with checks of interpolated values.
-  const expandValue = (value, rounds) => {
+  const expandValue = (value, rounds, self) => {
     for (let remaining = rounds; remaining > 0; remaining--) {
-      const next = expandRefs(value, remaining - 1);
+      const next = expandRefs(value, remaining - 1, self);
       if (next === value) break;
       value = next;
     }
@@ -624,7 +647,7 @@ function parseEnvFile(text) {
   const out = {};
   for (const [key, val] of Object.entries(raw)) {
     if (quoteOf[key] === 'single') { out[key] = val; continue; }
-    const v = expandValue(val.split(ESC).join(PH), 5);
+    const v = expandValue(val.split(ESC).join(PH), 5, key);
     out[key] = v.split(PH).join('${');
   }
   return out;

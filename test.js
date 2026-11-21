@@ -52,10 +52,10 @@ assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
   assert.strictEqual(validateEnv(schema, { PORT: '0' }).PORT, 0);
   assert.strictEqual(validateEnv(schema, { PORT: '65535' }).PORT, 65535);
   for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', null, false]) {
-    assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535\)/);
+    assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535, e\.g\. 3000\)/);
   }
   const untrimmed = { PORT: { ...schema.PORT, trim: false } };
-  assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535\)/);
+  assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535, e\.g\. 3000\)/);
   assert.throws(() => validateEnv(schema, { PORT: '' }), /missing required variable/);
 }
 
@@ -894,6 +894,29 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #185: a self-reference with a default (`${A:-...}` / `${A-...}`) uses
+// the default, because the key's own value is not set while its own line is
+// being resolved — exactly as for a genuinely absent name. A self-reference
+// without a default stays literal, and a genuine cycle (A=${B}, B=${A}) still
+// resolves to literals without looping forever.
+assert.deepStrictEqual(
+  parseEnvFile('A=${A:-fallback}\n'),
+  { A: 'fallback' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${A-fallback}\n'),
+  { A: 'fallback' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${A}\n'),
+  { A: '${A}' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${B}\nB=${A}\n'),
+  { A: '${A}', B: '${B}' });
+// the self-reference is unset at nesting depth too: it sits inside another
+// key's default, reached while A's own line is being resolved
+assert.deepStrictEqual(
+  parseEnvFile('A=${ENV_SAAF_TEST_MISSING_NESTED:-${A:-q}}\n'),
+  { A: 'q' });
+
 // Issue #25: loadEnv — multiple files; later files override earlier ones,
 // via `paths: [...]` or `path` as an array.
 {
@@ -1444,7 +1467,7 @@ assert.deepStrictEqual(
     // A wrong-typed value in the real .env fails the check, naming the key, exit 1.
     const bad = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
     assert.strictEqual(bad.status, 1);
-    assert.ok(bad.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), bad.stdout);
+    assert.ok(bad.stdout.includes('INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'), bad.stdout);
     assert.ok(!bad.stdout.includes('DEBUG'), bad.stdout);
 
     // --json reports the failure in the existing `invalid` field.
@@ -1454,7 +1477,7 @@ assert.deepStrictEqual(
       ok: false,
       missing: [],
       extra: [],
-      invalid: ['PORT: expected a port (0-65535), got "not-a-port"'],
+      invalid: ['PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'],
       envExtra: [],
       envMissing: [],
     });
@@ -1483,7 +1506,7 @@ assert.deepStrictEqual(
     fs.writeFileSync(path.join(dir, 'custom.env'), 'PORT=not-a-port\nDEBUG=yes\n');
     const custom = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--file', 'custom.env'], { encoding: 'utf8' });
     assert.strictEqual(custom.status, 1);
-    assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), custom.stdout);
+    assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'), custom.stdout);
 
     // A schema file that cannot be loaded is a usage error (exit 2), not a finding.
     const missing = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'nope.js'], { encoding: 'utf8' });
@@ -1716,7 +1739,7 @@ assert.deepStrictEqual(
   // Invalid values are collected; the values that did validate are returned.
   const partial = validateEnv(schema, { PORT: 'abc', NAME: 'ok', DEBUG: 'yes' }, { throwOnError: false });
   assert.deepStrictEqual(partial.env, { NAME: 'ok', DEBUG: true });
-  assert.deepStrictEqual(partial.errors, ['PORT: expected a port (0-65535), got "abc"']);
+  assert.deepStrictEqual(partial.errors, ['PORT: expected a port (0-65535, e.g. 3000), got "abc"']);
 
   // A clean environment returns the env the throwing API would and no errors.
   const clean = validateEnv(schema, { PORT: '3000', DEBUG: 'false' }, { throwOnError: false });
@@ -1904,40 +1927,214 @@ assert.deepStrictEqual(
     assert.throws(
       () => validateEnv({ N: { type: 'number' } }, { N: raw }),
       err => err instanceof EnvSaafError && err.errors.length === 1
-        && err.errors[0] === `N: expected a number, got "${raw}"`,
+        && err.errors[0] === `N: expected a number (e.g. 3.14), got "${raw}"`,
     );
     assert.throws(
       () => validateEnv({ N: { type: 'int' } }, { N: raw }),
       err => err instanceof EnvSaafError && err.errors.length === 1
-        && err.errors[0] === `N: expected an integer, got "${raw}"`,
+        && err.errors[0] === `N: expected an integer (e.g. 42), got "${raw}"`,
     );
   }
   // Non-finite values cannot slip past a lower bound like min: 0 either.
   assert.throws(
     () => validateEnv({ N: { type: 'number', min: 0 } }, { N: 'Infinity' }),
-    err => err instanceof EnvSaafError && err.errors[0] === 'N: expected a number, got "Infinity"',
+    err => err instanceof EnvSaafError && err.errors[0] === 'N: expected a number (e.g. 3.14), got "Infinity"',
   );
   // Non-finite defaults are rejected just like env inputs.
   for (const def of [Infinity, -Infinity, '1e999']) {
     assert.throws(
       () => validateEnv({ N: { type: 'number', default: def } }, {}),
-      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number, got "${def}"`,
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number (e.g. 3.14), got "${def}"`,
     );
     assert.throws(
       () => validateEnv({ N: { type: 'int', default: def } }, {}),
-      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer, got "${def}"`,
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer (e.g. 42), got "${def}"`,
     );
   }
   // Non-throwing mode collects the error and omits the key.
   const collected = validateEnv({ N: { type: 'number' } }, { N: '1e999' }, { throwOnError: false });
   assert.deepStrictEqual(collected.env, {});
-  assert.deepStrictEqual(collected.errors, ['N: expected a number, got "1e999"']);
+  assert.deepStrictEqual(collected.errors, ['N: expected a number (e.g. 3.14), got "1e999"']);
   // Ordinary finite inputs still pass for both 'number' and 'int'.
   for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['3.14', 3.14], ['-0.5', -0.5], ['1e3', 1000], ['1.5e-2', 0.015]]) {
     assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: raw }).N, expected);
   }
   for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['1e3', 1000], ['1.5e2', 150]]) {
     assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: raw }).N, expected);
+  }
+}
+
+// Issue #58: every built-in type's validation error includes a format example,
+// and aggregated errors remain one concise bullet per key.
+{
+  const cases = [
+    ['email', 'not-an-email', 'e.g. user@example.com'],
+    ['number', 'not-a-number', 'e.g. 3.14'],
+    ['int', '3.5', 'e.g. 42'],
+    ['json', '{bad', 'e.g. {"key":"value"}'],
+    ['boolean', 'maybe', 'e.g. true/false, yes/no, on/off, 1/0, y/n'],
+    ['url', 'not-a-url', 'e.g. https://example.com'],
+    ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
+    ['hex', 'not-hex!', 'e.g. deadbeef'],
+    ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
+    ['semver', 'v1.2.3', 'e.g. 1.2.3'],
+    ['base64', 'not base64!', 'e.g. aGVsbG8='],
+    ['port', 'abc', '0-65535, e.g. 3000'],
+    ['date', '2026-02-31', 'e.g. 2026-01-31'],
+    ['file', './definitely-missing-env-saaf-file.json', 'e.g. ./config.json'],
+    ['duration', '15min', 'e.g. 500ms, 30s, 15m, 2h, 1d, 1w'],
+    ['host', 'https://db.internal', 'e.g. db.internal, localhost, 10.0.0.5'],
+  ];
+  for (const [type, bad, expectedHint] of cases) {
+    assert.throws(
+      () => validateEnv({ VAL: { type } }, { VAL: bad }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0].includes(`(${expectedHint})`)
+        && err.errors[0].includes(`got "${bad}"`),
+      `${type} error should include (${expectedHint})`,
+    );
+  }
+
+  // Aggregated EnvSaafError stays readable: one single-line bullet per failing key.
+  const schema = {};
+  const badEnv = {};
+  for (const [type, bad] of cases) {
+    const key = `BAD_${type.toUpperCase()}`;
+    schema[key] = { type, required: true };
+    badEnv[key] = bad;
+  }
+  let aggregated;
+  try { validateEnv(schema, badEnv); } catch (e) { aggregated = e; }
+  assert.ok(aggregated instanceof EnvSaafError);
+  assert.strictEqual(aggregated.errors.length, cases.length);
+  const lines = aggregated.message.split('\n');
+  assert.strictEqual(lines[0], 'Invalid environment variables:');
+  assert.strictEqual(lines.length, cases.length + 1);
+  for (let i = 0; i < cases.length; i++) {
+    const [type, , expectedHint] = cases[i];
+    const key = `BAD_${type.toUpperCase()}`;
+    assert.ok(lines[i + 1].startsWith(`  - ${key}: `), lines[i + 1]);
+    assert.ok(lines[i + 1].includes(`(${expectedHint})`), lines[i + 1]);
+  }
+}
+
+// Issue #170 + #178: CLI round-trip — a fresh `init` followed by `check`
+// passes with a single note instead of one UNUSED line per scaffolded key,
+// and UNUSED fails the check again as soon as code reads a variable.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-roundtrip-'));
+  try {
+    // init in an empty directory, then check: exit 0, one plain note, no
+    // UNUSED lines — the scaffold is ahead of the code, not drift.
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    const checked = run(['check', dir]);
+    assert.strictEqual(checked.status, 0, checked.stdout + checked.stderr);
+    assert.ok(checked.stdout.includes('no process.env usage found in code yet'), checked.stdout);
+    assert.ok(checked.stdout.includes('8 keys in .env.example are not used by any code yet'), checked.stdout);
+    assert.ok(!checked.stdout.includes('UNUSED:'), checked.stdout);
+    const checkedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.strictEqual(checkedJson.ok, true);
+    assert.deepStrictEqual(checkedJson.extra, []);
+    assert.ok(checkedJson.note.includes('no process.env usage found in code yet'), checkedJson.note);
+    // --schema with no real .env: the schema step is skipped, the note still rules.
+    assert.strictEqual(run(['check', dir, '--schema', './env.schema.js']).status, 0);
+
+    // A real finding still fails even with no code usage: an EXTRA key in .env
+    // is not hidden behind the scaffold note.
+    fs.writeFileSync(path.join(dir, '.env'), 'TYPO_KEY=1\n');
+    const extra = run(['check', dir]);
+    assert.strictEqual(extra.status, 1);
+    assert.ok(extra.stdout.includes('EXTRA in .env: TYPO_KEY'), extra.stdout);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // Once code reads one variable, UNUSED is a finding again (#113): the
+    // other seven scaffolded keys fail the check, in text and --json.
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const port = process.env.PORT;\n');
+    const drifted = run(['check', dir]);
+    assert.strictEqual(drifted.status, 1);
+    assert.ok(drifted.stdout.includes('UNUSED: APP_NAME'), drifted.stdout);
+    assert.ok(!drifted.stdout.includes('no process.env usage found'), drifted.stdout);
+    const driftedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.strictEqual(driftedJson.ok, false);
+    assert.strictEqual(driftedJson.extra.length, 7);
+    assert.strictEqual(driftedJson.note, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #184: CLI 'init' in an ES module project writes env.schema.cjs
+// instead of crashing on require() of a .js starter Node treats as ESM.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-esm-'));
+  try {
+    // A "type": "module" project: init exits 0, writes env.schema.cjs (not
+    // env.schema.js) + .env.example, and the whole round-trip works —
+    // check passes with the scaffold note, and check --schema validates a
+    // real .env against the .cjs schema.
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"esmproj","type":"module"}\n');
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    assert.ok(inited.stdout.includes('env.schema.cjs'), inited.stdout);
+    assert.ok(fs.existsSync(path.join(dir, 'env.schema.cjs')));
+    assert.ok(!fs.existsSync(path.join(dir, 'env.schema.js')));
+    assert.ok(fs.existsSync(path.join(dir, '.env.example')));
+    const starter = require(path.join(dir, 'env.schema.cjs'));
+    assert.strictEqual(starter.PORT.type, 'port');
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), generateExample(starter));
+    assert.strictEqual(run(['check', dir]).status, 0);
+    fs.writeFileSync(path.join(dir, '.env'),
+      'APP_NAME=myapp\nRETRIES=3\nDEBUG=false\nPORT=3000\nAPI_URL=https://example.com\nSUPPORT_EMAIL=a@b.com\nSHUTDOWN_TIMEOUT=15m\nDB_HOST=localhost\n');
+    assert.strictEqual(run(['check', dir, '--schema', './env.schema.cjs']).status, 0);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // An explicit --schema .js name in the same project is refused cleanly
+    // (exit 2, no stack trace) and writes neither file.
+    const refused = run(['init', dir, '--force', '--schema', 'custom.js']);
+    assert.strictEqual(refused.status, 2, refused.stdout + refused.stderr);
+    assert.ok(refused.stderr.includes('.cjs'), refused.stderr);
+    assert.ok(!refused.stderr.includes('ReferenceError'), refused.stderr);
+    assert.ok(!fs.existsSync(path.join(dir, 'custom.js')));
+
+    // check --schema on a .js schema in an ES module project names the fix.
+    fs.writeFileSync(path.join(dir, 'bad.js'), "module.exports = { PORT: { type: 'port' } };\n");
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    const badCheck = run(['check', dir, '--schema', './bad.js']);
+    assert.strictEqual(badCheck.status, 2);
+    assert.ok(badCheck.stderr.includes('.cjs'), badCheck.stderr);
+    assert.ok(!badCheck.stderr.includes('ReferenceError'), badCheck.stderr);
+    fs.rmSync(path.join(dir, '.env'));
+    fs.rmSync(path.join(dir, 'bad.js'));
+
+    // A CommonJS project is unchanged: the starter is still env.schema.js.
+    const cjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cjs-'));
+    try {
+      fs.writeFileSync(path.join(cjsDir, 'package.json'), '{"name":"cjsproj","type":"commonjs"}\n');
+      const cjsInit = run(['init', cjsDir]);
+      assert.strictEqual(cjsInit.status, 0, cjsInit.stderr);
+      assert.ok(fs.existsSync(path.join(cjsDir, 'env.schema.js')));
+      assert.ok(!fs.existsSync(path.join(cjsDir, 'env.schema.cjs')));
+    } finally {
+      fs.rmSync(cjsDir, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 

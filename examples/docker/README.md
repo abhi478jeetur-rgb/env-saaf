@@ -29,9 +29,9 @@ docker compose --env-file .env.bad.example up --exit-code-from app
 
 ```text
 Invalid environment variables:
-  - PORT: expected a port (0-65535), got "not-a-port"
-  - APP_DEBUG: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "maybe"
-  - API_URL: expected a valid URL, got "not-a-url"
+  - PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"
+  - APP_DEBUG: expected a boolean (e.g. true/false, yes/no, on/off, 1/0, y/n), got "maybe"
+  - API_URL: expected a valid URL (e.g. https://example.com), got "not-a-url"
 ```
 
 Clean up the example container when finished:
