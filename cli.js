@@ -263,10 +263,14 @@ if (cmd === 'scan') {
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
     && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0);
   if (jsonMode) {
+    // Issue #187: `scan --json` names the documented-but-unused keys `unused`,
+    // so `check --json` now exposes the same list under the same name. `extra`
+    // keeps its identical value so existing consumers are unaffected.
     const result = {
       ok,
       missing: usedNotDocumented,
       extra: scaffoldAhead ? [] : documentedNotUsed,
+      unused: scaffoldAhead ? [] : documentedNotUsed,
       invalid,
       envExtra,
       envMissing,

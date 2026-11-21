@@ -467,6 +467,76 @@ const env = validateEnv({
 Validate the mode first, then choose an ordinary schema in application code. `validateEnv` does not
 provide conditional rules inside a schema.
 
+### Fastify
+
+Validate configuration at startup **before** registering plugins or calling `fastify.listen(...)`, then attach the typed, frozen config object to the Fastify instance with `fastify.decorate('config', config)`. Running validation before `register` and `listen` ensures the process fails fast before plugins open database pools or the server binds a port, and decorating the instance gives routes and plugins typed access via `fastify.config` without re-reading `process.env`:
+
+```js
+const Fastify = require('fastify');
+const { EnvSaafError, validateEnv } = require('env-saaf');
+
+function buildApp() {
+  let config;
+  try {
+    // Runs before registering plugins or calling listen(), so a bad config
+    // fails fast before opening database pools or binding a port.
+    config = validateEnv({
+      PORT:         { type: 'port', default: 3000 },
+      HOST:         { type: 'host', default: '127.0.0.1' },
+      DATABASE_URL: { type: 'url', required: true },
+      LOG_LEVEL:    { type: 'string', choices: ['info', 'warn', 'error'], default: 'info' },
+    });
+  } catch (err) {
+    if (!(err instanceof EnvSaafError)) throw err;
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
+  fastify.decorate('config', config);
+
+  fastify.get('/health', async () => ({
+    ok: true,
+    port: fastify.config.PORT,
+  }));
+
+  return fastify;
+}
+
+const fastify = buildApp();
+fastify.listen({ port: fastify.config.PORT, host: fastify.config.HOST });
+```
+
+For local development with a `.env` file, replace `validateEnv(schema)` with `loadEnv(schema)` (or `loadEnv(schema, { paths: ['.env', '.env.local'] })`) in the same startup block.
+
+### Next.js
+
+Put your server-only schema in a shared module (such as `lib/env.ts`) and import it from Next.js's `instrumentation.ts` `register()` hook, which runs **once when the Node.js server boots** — before handling requests, Route Handlers, or Server Components. Guard with `process.env.NEXT_RUNTIME === 'nodejs'` if your app also uses the Edge runtime, since `env-saaf` uses Node built-ins (`node:fs`, `node:net`, `node:path`). You can also import the same validation module at the top of `next.config.mjs` if you want `next build` to fail fast on missing build-time config.
+
+```ts
+// lib/env.ts — server-only configuration (never import in Client Components)
+import { validateEnv } from 'env-saaf';
+
+export const serverEnv = validateEnv({
+  DATABASE_URL: { type: 'url', required: true },
+  AUTH_SECRET:  { type: 'string', minLength: 32, required: true },
+  API_TIMEOUT:  { type: 'duration', default: '10s' },
+});
+```
+
+```ts
+// instrumentation.ts — runs once when the Next.js Node.js server starts
+export async function register() {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    await import('./lib/env');
+  }
+}
+```
+
+Next.js loads `.env`, `.env.local`, and environment-specific `.env.*` files into `process.env` automatically before `instrumentation.ts` runs, so `validateEnv` reads them directly without calling `loadEnv`.
+
+**`NEXT_PUBLIC_` variables are out of scope for secrets:** Next.js inlines every `NEXT_PUBLIC_*` variable into the browser bundle at build time. Never store secrets (API keys, database URLs, signing secrets) in `NEXT_PUBLIC_*` variables — keep secrets in unprefixed server-only variables validated in server-only modules like `lib/env.ts`. If you also want to validate public client settings (such as `NEXT_PUBLIC_SITE_URL`), pass an explicit object (`validateEnv({ NEXT_PUBLIC_SITE_URL: { type: 'url', required: true } }, { NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL })`) because Next.js statically replaces literal `process.env.NEXT_PUBLIC_*` references in client bundles rather than exposing a full `process.env` object.
+
 ### Keep `.env.example` honest (CLI)
 
 CLI output is plain text by default, including in pipes and CI. For scripts that set a shared color preference, pass `--no-color` before or after the command, or set `NO_COLOR=1`.
@@ -476,7 +546,7 @@ npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
 npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
-npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra) for CI or tooling
+npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
 npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
@@ -490,7 +560,7 @@ When `.env.example` (or the file given with `--file`) sits in the scanned direct
 
 A scan reads code, not comments or the text inside string and template literals: a variable named only in a comment (`// set process.env.FOO first`), a string (`'see process.env.BAR'`) or a template's text isn't reported, so it can't quietly satisfy `check` or land in an `example` draft. A read inside a template's `${...}` is still a read, and so are `process.env['X']`, ``process.env[`X`]`` and destructuring.
 
-When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra` and `invalid` fields.
+When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra`, `unused` and `invalid` fields — `unused` lists the documented-but-unused keys under the same name `scan --json` uses, and `extra` keeps the identical list for compatibility.
 
 `check` exits 1 whenever it prints any finding, and `--json` `ok` carries the same value, so a CI job fails exactly when the output reports a problem; a fully clean project exits 0. `UNUSED` counts as a finding too: a key left in the template after its code usage is gone fails the run, so remove it from the template when you remove the last usage. The one exception is a project with no `process.env` usage at all — a fresh scaffold, for example: `check` then passes with a single note (a `note` field in `--json`) instead of one `UNUSED` line per key, because there is no code for the template to drift from yet.
 

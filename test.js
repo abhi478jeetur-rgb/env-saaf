@@ -698,6 +698,8 @@ assert.ok(!ex.includes('sk_live'));
   assert.deepStrictEqual(parsed.missing, ['MISSING_KEY']);
   assert.deepStrictEqual(parsed.extra, ['EXTRA_KEY']);
   assert.deepStrictEqual(parsed.invalid, []);
+  // Issue #187: the same keys are also exposed as `unused`, the name scan --json uses
+  assert.deepStrictEqual(parsed.unused, ['EXTRA_KEY']);
 
   // scan --json: lists vars, ok true, exit 0
   const scanOut = execFileSync('node', [cli, 'scan', dir, '--json'], { encoding: 'utf8' });
@@ -711,6 +713,48 @@ assert.ok(!ex.includes('sk_live'));
   assert.ok(!humanOut.includes('{'));
 
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Issue #187: check --json exposes documented-but-unused keys as `unused`, the
+// same name scan --json uses for them — `extra` keeps the same list so existing
+// consumers of the old shape are untouched.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-check-unused-'));
+
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const used = process.env.USED_KEY;');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'USED_KEY=1\nOLD_KEY=2\nANOTHER_OLD=3\n');
+
+    const json = spawnSync(process.execPath, [cli, 'check', dir, '--json'], { encoding: 'utf8' });
+    assert.strictEqual(json.status, 1);
+    const parsed = JSON.parse(json.stdout);
+    assert.strictEqual(parsed.ok, false);
+    assert.deepStrictEqual(parsed.extra, ['OLD_KEY', 'ANOTHER_OLD']);
+    assert.deepStrictEqual(parsed.unused, ['OLD_KEY', 'ANOTHER_OLD']);
+    assert.deepStrictEqual(parsed.missing, []);
+
+    // Text mode is unchanged: UNUSED stays a finding with exit 1.
+    const human = spawnSync(process.execPath, [cli, 'check', dir], { encoding: 'utf8' });
+    assert.strictEqual(human.status, 1);
+    assert.ok(human.stdout.includes('UNUSED: OLD_KEY'), human.stdout);
+    assert.ok(human.stdout.includes('UNUSED: ANOTHER_OLD'), human.stdout);
+
+    // scan --json is untouched: `unused` still sits next to `vars`, ok true, exit 0.
+    const scanJson = spawnSync(process.execPath, [cli, 'scan', dir, '--json'], { encoding: 'utf8' });
+    assert.strictEqual(scanJson.status, 0);
+    assert.deepStrictEqual(JSON.parse(scanJson.stdout), {
+      ok: true,
+      vars: ['USED_KEY'],
+      unused: ['OLD_KEY', 'ANOTHER_OLD'],
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Issue #100: CLI check also compares the real .env with the template keys.
@@ -736,6 +780,7 @@ assert.ok(!ex.includes('sk_live'));
       ok: false,
       missing: [],
       extra: [],
+      unused: [],
       invalid: [],
       envExtra: ['DATABSE_URL'],
       envMissing: ['DATABASE_URL'],
@@ -755,6 +800,7 @@ assert.ok(!ex.includes('sk_live'));
       ok: true,
       missing: [],
       extra: [],
+      unused: [],
       invalid: [],
       envExtra: [],
       envMissing: [],
@@ -1477,6 +1523,7 @@ assert.deepStrictEqual(
       ok: false,
       missing: [],
       extra: [],
+      unused: [],
       invalid: ['PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'],
       envExtra: [],
       envMissing: [],
