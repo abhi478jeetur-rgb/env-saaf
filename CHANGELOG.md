@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: add Bun and Deno usage examples to README, covering `bun add`, CommonJS/ESM imports, Deno's `npm:` specifier, and Deno permission flags (fixes #177).
 - Added: per-key `validate(value, env)` rule option — runs after type coercion and built-in checks (including on `default` values), before `transform`; return `true` (or `undefined`/`null`) to pass, `false` for a generic error, or a non-empty string error message to fail. Throwing validators are collected as validation failures naming the key instead of crashing, non-function `validate` options are rejected up front, and `sensitive: true` masks values in custom validation errors (fixes #52).
 - Added: CLI `init` scans the directory first (the same scan `check`/`example` use) and folds keys the code already reads into the starter schema as `{ type: 'string' }` entries under a comment noting they came from the scan — the generated `.env.example` covers them too, so the first `check` after `init` reports no `MISSING in .env.example` lines to merge by hand. The discovered keys are also listed on init's output; keys the scaffold already declares are not duplicated, and a directory with no code yet scaffolds exactly as before (fixes #171).
 - Docs: add Fastify and Next.js startup validation examples to README, explaining boot-order placement and calling out `NEXT_PUBLIC_` variables as out of scope for secrets (fixes #65).
