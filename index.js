@@ -90,15 +90,18 @@ function coerce(key, raw, type, trim = true, protocols) {
       return s;
     }
     case 'number': {
+      // Reject NaN as well as non-finite results (Infinity, -Infinity, and
+      // exponent overflow like '1e999'): Number() parses them without error,
+      // and a silent Infinity breaks downstream maths (issue #175).
       const n = Number(v);
-      if (v === '' || Number.isNaN(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
+      if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
       return n;
     }
     case 'int': {
       // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
-      // it passes; '3.5' and 'abc' do not.
+      // it passes; '3.5', 'abc', and non-finite values ('Infinity', '1e999') do not.
       const n = Number(v);
-      if (v === '' || Number.isNaN(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer, got "${raw}"`);
+      if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer, got "${raw}"`);
       return n;
     }
     case 'json': {

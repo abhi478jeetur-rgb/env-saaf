@@ -1498,8 +1498,6 @@ assert.deepStrictEqual(
   }
 }
 
-console.log('env-saaf v1.5.0: all tests passed');
-
 // Issue #89: a missing template file must point at the command that drafts one,
 // and --json must carry that hint instead of plain text on stderr.
 {
@@ -1898,3 +1896,49 @@ console.log('env-saaf v1.5.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// Issue #175: 'number' and 'int' reject non-finite values (Infinity, -Infinity, exponent overflow).
+{
+  const nonFinite = ['Infinity', '-Infinity', '+Infinity', '1e999', '-1e999', ' Infinity ', ' 1e999 '];
+  for (const raw of nonFinite) {
+    assert.throws(
+      () => validateEnv({ N: { type: 'number' } }, { N: raw }),
+      err => err instanceof EnvSaafError && err.errors.length === 1
+        && err.errors[0] === `N: expected a number, got "${raw}"`,
+    );
+    assert.throws(
+      () => validateEnv({ N: { type: 'int' } }, { N: raw }),
+      err => err instanceof EnvSaafError && err.errors.length === 1
+        && err.errors[0] === `N: expected an integer, got "${raw}"`,
+    );
+  }
+  // Non-finite values cannot slip past a lower bound like min: 0 either.
+  assert.throws(
+    () => validateEnv({ N: { type: 'number', min: 0 } }, { N: 'Infinity' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'N: expected a number, got "Infinity"',
+  );
+  // Non-finite defaults are rejected just like env inputs.
+  for (const def of [Infinity, -Infinity, '1e999']) {
+    assert.throws(
+      () => validateEnv({ N: { type: 'number', default: def } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number, got "${def}"`,
+    );
+    assert.throws(
+      () => validateEnv({ N: { type: 'int', default: def } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer, got "${def}"`,
+    );
+  }
+  // Non-throwing mode collects the error and omits the key.
+  const collected = validateEnv({ N: { type: 'number' } }, { N: '1e999' }, { throwOnError: false });
+  assert.deepStrictEqual(collected.env, {});
+  assert.deepStrictEqual(collected.errors, ['N: expected a number, got "1e999"']);
+  // Ordinary finite inputs still pass for both 'number' and 'int'.
+  for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['3.14', 3.14], ['-0.5', -0.5], ['1e3', 1000], ['1.5e-2', 0.015]]) {
+    assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: raw }).N, expected);
+  }
+  for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['1e3', 1000], ['1.5e2', 150]]) {
+    assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: raw }).N, expected);
+  }
+}
+
+console.log('env-saaf v1.5.0: all tests passed');

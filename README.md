@@ -44,7 +44,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | Type | Accepted input | JavaScript output | Additional rule options |
 | --- | --- | --- | --- |
 | `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `number` | Non-empty text accepted by `Number()`, including fractions and exponent notation. Rejects `NaN`. | `number` | `trim`, `min`, `max` |
+| `number` | Non-empty text accepted by `Number()`, including fractions and exponent notation. Rejects `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
 | `int` | Numeric text resolving to an integer, e.g. `42`, `1e3` | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
 | `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
