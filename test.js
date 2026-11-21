@@ -1848,6 +1848,9 @@ assert.deepStrictEqual(
       if (id === 'node:fs') return {
         existsSync: file => file === dir,
         statSync: () => ({ isDirectory: () => true }),
+        // Issue #171: init now scans the directory before writing; this stub
+        // project has no files, so the scan finds nothing.
+        readdirSync: () => [],
         writeFileSync: (file, contents) => writes.set(file, contents),
       };
       if (id === 'node:path') return {
@@ -1856,6 +1859,10 @@ assert.deepStrictEqual(
         resolve: (root, file) => path.resolve(file === 'D:custom.js' ? 'D:\\schemas' : root, file),
       };
       if (id === schemaPath) return {};
+      // Issue #171: init scans the directory before writing; this stub
+      // project ('C:\\project') does not exist on disk, so hand the CLI a
+      // scan that finds nothing instead of the real scanDir.
+      if (id === './index') return { ...require('./index'), scanDir: () => [] };
       return require(id);
     };
     requireFromCli.resolve = id => id;
@@ -2179,6 +2186,85 @@ assert.deepStrictEqual(
       assert.ok(!fs.existsSync(path.join(cjsDir, 'env.schema.cjs')));
     } finally {
       fs.rmSync(cjsDir, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #171: `init` scans the directory first (the same scan `check` and
+// `example` use) and folds keys the code already reads into the starter schema
+// as `{ type: 'string' }` entries, so the generated .env.example covers them
+// and the first `check` reports no MISSING lines to merge by hand. A directory
+// with no code yet scaffolds exactly as before, and keys the scaffold already
+// declares are not duplicated.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-init-scan-'));
+  try {
+    // Code already reads FOO and PORT: FOO must be folded into the scaffold,
+    // while PORT (already scaffolded) must not be duplicated.
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const port = process.env.PORT;\nconst tag = process.env.FOO;\n');
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    // The discovered keys are listed in init's output.
+    assert.ok(inited.stdout.includes('folded in 1 key found by scanning the code: FOO'), inited.stdout);
+    const schemaFile = path.join(dir, 'env.schema.js');
+    const schemaText = fs.readFileSync(schemaFile, 'utf8');
+    assert.match(schemaText, /FOO: \{ type: 'string' \},/);
+    assert.match(schemaText, /Found by scanning this project's code/);
+    assert.strictEqual(schemaText.match(/^  PORT:/gm).length, 1, schemaText);
+    const starter = require(schemaFile);
+    assert.deepStrictEqual(starter.FOO, { type: 'string' });
+    const exampleText = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
+    assert.match(exampleText, /^FOO=your_value_here$/m);
+    assert.strictEqual(exampleText.match(/^PORT=/gm).length, 1, exampleText);
+    assert.strictEqual(exampleText, generateExample(starter));
+
+    // The original complaint is gone: the first `check` after init no longer
+    // reports the scanned key as MISSING in .env.example (text or --json).
+    const checked = run(['check', dir]);
+    assert.ok(!checked.stdout.includes('MISSING in .env.example: FOO'), checked.stdout);
+    const checkedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.deepStrictEqual(checkedJson.missing, []);
+
+    // Once the code reads every documented key (the folded one included), the
+    // whole round trip is clean: check --schema validates a real .env against
+    // the folded scaffold with no hand merging.
+    fs.writeFileSync(path.join(dir, 'app.js'),
+      'const a = process.env.APP_NAME, r = process.env.RETRIES, d = process.env.DEBUG;\n'
+      + 'const p = process.env.PORT, u = process.env.API_URL, e = process.env.SUPPORT_EMAIL;\n'
+      + 'const t = process.env.SHUTDOWN_TIMEOUT, h = process.env.DB_HOST, f = process.env.FOO;\n');
+    fs.writeFileSync(path.join(dir, '.env'),
+      'APP_NAME=myapp\nRETRIES=3\nDEBUG=false\nPORT=3000\nAPI_URL=https://example.com\nSUPPORT_EMAIL=a@b.com\nSHUTDOWN_TIMEOUT=15m\nDB_HOST=localhost\nFOO=bar\n');
+    const roundTrip = run(['check', dir, '--schema', './env.schema.js']);
+    assert.strictEqual(roundTrip.status, 0, roundTrip.stdout + roundTrip.stderr);
+    assert.ok(roundTrip.stdout.includes('all clean'), roundTrip.stdout);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // A fresh directory (no code yet) behaves exactly as before: the same 8
+    // starter keys, no scan comment, and no "folded in" line on stdout.
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-init-fresh-'));
+    try {
+      const freshInit = run(['init', fresh]);
+      assert.strictEqual(freshInit.status, 0, freshInit.stderr);
+      assert.ok(freshInit.stdout.includes('(8 variables)'), freshInit.stdout);
+      assert.ok(!freshInit.stdout.includes('folded in'), freshInit.stdout);
+      const freshSchema = fs.readFileSync(path.join(fresh, 'env.schema.js'), 'utf8');
+      assert.doesNotMatch(freshSchema, /Found by scanning/);
+      const freshStarter = require(path.join(fresh, 'env.schema.js'));
+      assert.deepStrictEqual(
+        Object.keys(freshStarter),
+        ['APP_NAME', 'RETRIES', 'DEBUG', 'PORT', 'API_URL', 'SUPPORT_EMAIL', 'SHUTDOWN_TIMEOUT', 'DB_HOST'],
+      );
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true });
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

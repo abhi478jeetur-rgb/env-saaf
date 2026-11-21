@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Docs: add Bun and Deno usage examples to README, covering `bun add`, CommonJS/ESM imports, Deno's `npm:` specifier, and Deno permission flags (fixes #177).
+- Added: CLI `init` scans the directory first (the same scan `check`/`example` use) and folds keys the code already reads into the starter schema as `{ type: 'string' }` entries under a comment noting they came from the scan — the generated `.env.example` covers them too, so the first `check` after `init` reports no `MISSING in .env.example` lines to merge by hand. The discovered keys are also listed on init's output; keys the scaffold already declares are not duplicated, and a directory with no code yet scaffolds exactly as before (fixes #171).
 - Docs: add Fastify and Next.js startup validation examples to README, explaining boot-order placement and calling out `NEXT_PUBLIC_` variables as out of scope for secrets (fixes #65).
 - Added: `sensitive: true` rule option — always masks the key's value in validation errors (`validateEnv`, `loadEnv`, CLI `check --schema`) even when the variable name does not look like a secret (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`; non-boolean `sensitive` values are rejected up front, and non-sensitive keys behave unchanged (fixes #54).
 - Added: `check --json` exposes the documented-but-unused keys as an `unused` field, the same name `scan --json` already uses for them; the existing `extra` field keeps its identical value, so current consumers of the old shape are unaffected (fixes #187).
