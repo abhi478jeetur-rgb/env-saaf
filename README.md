@@ -305,6 +305,93 @@ env.TYPO;            // TypeScript error — not in the schema
 
 Pass the schema inline to `validateEnv(...)` (or use `as const`) so TypeScript can see the literal types. The `EnvResult<S>` and `EnvValue<R>` types are also exported separately.
 
+### Bun and Deno
+
+`env-saaf` is plain CommonJS with zero dependencies and only uses Node's `node:fs`, `node:net`, and `node:path` built-ins, so it runs in Bun and Deno as well as Node.js.
+
+#### Bun
+
+Install with `bun add` and load `env-saaf` with `require` (Bun runs CommonJS npm packages natively) or ES module `import`:
+
+```bash
+bun add env-saaf
+```
+
+```js
+// config.js — `import { EnvSaafError, validateEnv } from 'env-saaf'` works too
+const { EnvSaafError, validateEnv } = require('env-saaf');
+
+try {
+  const env = validateEnv({
+    PORT:      { type: 'port', required: true },
+    DEBUG:     { type: 'boolean', default: false },
+    API_URL:   { type: 'url', required: true },
+    LOG_LEVEL: { type: 'string', choices: ['info', 'warn', 'error'], default: 'info' },
+  });
+  console.log(`Ready on port ${env.PORT} (${typeof env.PORT}), debug=${env.DEBUG} (${typeof env.DEBUG}), api=${env.API_URL}`);
+} catch (err) {
+  if (!(err instanceof EnvSaafError)) throw err;
+  console.error(err.message);
+  process.exit(1);
+}
+```
+
+Run with valid variables:
+
+```bash
+PORT=3000 DEBUG=true API_URL=https://api.example.com bun run config.js
+# Ready on port 3000 (number), debug=true (boolean), api=https://api.example.com
+```
+
+Run with missing or invalid variables to fail fast with every problem listed together (exit code `1`):
+
+```bash
+PORT=not-a-port DEBUG=maybe bun run config.js
+# Invalid environment variables:
+#   - PORT: expected a port (0-65535), got "not-a-port"
+#   - DEBUG: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "maybe"
+#   - API_URL: missing required variable
+```
+
+Bun automatically loads a local `.env` file into `process.env`, so `validateEnv` picks it up without extra setup. Use `loadEnv(schema, { path: '.env.local' })` (or `{ paths: ['.env', '.env.local'] }`) when you want to read a specific file or layer multiple files explicitly.
+
+#### Deno
+
+Import directly via Deno's `npm:` specifier — no install step needed:
+
+```ts
+// config.ts
+import { EnvSaafError, validateEnv } from 'npm:env-saaf';
+
+try {
+  const env = validateEnv({
+    PORT:      { type: 'port', required: true },
+    DEBUG:     { type: 'boolean', default: false },
+    API_URL:   { type: 'url', required: true },
+    LOG_LEVEL: { type: 'string', choices: ['info', 'warn', 'error'], default: 'info' },
+  });
+  console.log(`Ready on port ${env.PORT} (${typeof env.PORT}), debug=${env.DEBUG} (${typeof env.DEBUG}), api=${env.API_URL}`);
+} catch (err) {
+  if (!(err instanceof EnvSaafError)) throw err;
+  console.error(err.message);
+  Deno.exit(1);
+}
+```
+
+Run with `--allow-env` so `validateEnv` can read `process.env`:
+
+```bash
+PORT=3000 DEBUG=true API_URL=https://api.example.com deno run --allow-env config.ts
+# Ready on port 3000 (number), debug=true (boolean), api=https://api.example.com
+```
+
+With missing or invalid variables, `validateEnv` prints the same combined `EnvSaafError` list and exits with code `1`.
+
+Permissions needed in Deno:
+- `validateEnv(schema)` reads `process.env` and requires `--allow-env`. You can restrict it to the keys in your schema (for example `--allow-env=PORT,DEBUG,API_URL,LOG_LEVEL`), except with `{ strict: true }`, which enumerates all environment keys and requires unscoped `--allow-env`.
+- `loadEnv(schema)` reads `.env` files via `node:fs` (`fs.readFileSync`) and merges them with `process.env`, so it needs both `--allow-env` and `--allow-read` (for example `deno run --allow-env --allow-read=.env config.ts`).
+- Schemas that use `type: 'file'` check the path with `node:fs` (`fs.statSync` and `fs.openSync`), so they also require `--allow-read` for those paths.
+
 ## Recipes
 
 These short patterns use only `validateEnv` options available in the current API.
