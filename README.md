@@ -37,6 +37,8 @@ const env = validateEnv({
 // Missing/invalid vars throw ONE error listing ALL problems
 ```
 
+`validateEnv` treats an empty string (`''`) the same as an unset variable: an optional key with no `default` is omitted from the result, a `required` key fails as missing (`missing required variable`), and a key with a `default` uses that default instead. This matches `${VAR:-fallback}` in [Loading a real `.env` file](#loading-a-real-env-file), which also treats an empty expansion as unset. Only `''` counts as unset — whitespace-only input such as `'   '` is treated as provided (trimmed to `''` for `string` by default, or kept as-is with `trim: false`).
+
 ### Types reference
 
 Environment inputs are strings. Output below is before an optional `transform`.
@@ -60,8 +62,30 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`) |
 
-All types support `required`, `default`, `validate`, `transform` and `sensitive`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+All types support `required`, `requiredIf`, `default`, `validate`, `transform`, `sensitive` and `aliases`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+
+### Conditional requirements (`requiredIf`)
+
+Require a variable only when another variable matches a specific value (`equals`) or one of several values (`in`):
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  SENTRY_DSN:    { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+  ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+  MODE:          { type: 'string', choices: ['development', 'staging', 'production'], default: 'development' },
+});
+```
+
+`validateEnv` evaluates schemas in **two passes**:
+
+1. **Pass 1** coerces every provided variable, applies `default` values, runs all per-key checks (`min`/`max`, `minLength`/`maxLength`, `length`, `choices`, `pattern`, `transform`), and records unconditional `required: true` errors.
+2. **Pass 2** evaluates every `requiredIf` rule for keys that were absent and had no `default`, comparing against the validated values from Pass 1 (falling back to the raw `env` object if the referenced key is not declared in the schema).
+
+Because Pass 2 runs after Pass 1 finishes, key declaration order in the schema does not matter (`SENTRY_DSN` can be declared before `MODE`), and conditions match coerced values (such as `boolean` `true` or `int` `3`) as well as `default` values. When the condition holds and the key is missing, `validateEnv` reports the usual `<KEY>: missing required variable` error (or collects it in `errors` with `{ throwOnError: false }`). When the condition is false — or when the referenced key is absent or failed Pass 1 validation — the key stays optional. If the key is provided anyway, it is still coerced and validated as usual. Two combinations are rejected up front as schema errors: `required: true` together with `requiredIf` on the same key, and a `requiredIf` that names its own key — both are contradictory, so the schema fails instead of silently ignoring the condition.
 ### Non-throwing mode — collect errors instead of throwing
 
 A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
@@ -99,6 +123,28 @@ const env = validateEnv(schema, process.env, { strict: true });
 
 Default stays off — many apps share one environment with other tools.
 
+### Renaming variables safely with `aliases`
+
+Renaming an environment variable across a fleet usually means old and new names coexist for weeks. Declare the old names with `aliases` on the canonical key:
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv(
+  {
+    DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] },
+  },
+  process.env,
+  { onWarn: msg => logger.warn(msg) } // optional; defaults to console.warn
+);
+// env.DATABASE_URL receives the coerced, validated value (never env.DB_URL)
+```
+
+- When `DATABASE_URL` is unset (or empty `""`) and `DB_URL` is set, the first populated alias supplies the value under `env.DATABASE_URL`, runs through normal coercion, validation and `transform`, and emits a deprecation warning (`env-saaf: DB_URL is deprecated; use DATABASE_URL instead`).
+- When both `DATABASE_URL` and `DB_URL` are set, `DATABASE_URL` wins and a warning notes the alias is ignored (`env-saaf: DB_URL is ignored because DATABASE_URL is set`).
+- Warnings never fail validation. By default they are logged with `console.warn`; pass `onWarn: fn` to `validateEnv` or `loadEnv` to route them to your own logger (or `() => {}` to silence them).
+- In `{ strict: true }` mode, declared aliases are recognised and are not flagged as unknown variables.
+- An alias cannot equal a declared schema key (including its own key) or be shared by different rules. These schema mistakes throw `EnvSaafError` before reading values, even with `{ throwOnError: false }`. Repeating an alias within one rule is allowed.
 ### Per-key `validate` — custom validation rules
 
 Some rules are app-specific — a path must be an existing directory, or two keys must differ. Pass a `validate(value, env)` function on the key instead of forking the library:
@@ -243,6 +289,18 @@ const env = validateEnv({
 ```
 
 `url` validates with `new URL()` and returns the value exactly as given (no normalization — a bare origin gains no trailing slash). `protocols` allowlists the schemes a value may use (`['https']` rejects `ftp://...` and `javascript:...` with an error naming the allowed schemes); matching is case-insensitive, and entries may be written with or without a trailing colon (`'https'` and `'https:'` mean the same). Without the option, any valid URL passes, as before.
+
+### `array` type — split a delimited string into a typed array
+
+```js
+const env = validateEnv({
+  ALLOWED_ORIGINS: { type: 'array', of: 'url', protocols: ['https'], required: true },
+  PORTS:           { type: 'array', of: 'port', separator: ';', default: [80, 443] },
+  ADMIN_EMAILS:    { type: 'array', of: 'email' },
+});
+```
+
+`array` splits a delimited string on `separator` (default `','`), trims each item by default (`trim: false` keeps surrounding whitespace), and coerces every item with `of` (default `'string'`; any built-in scalar type is supported, and nested `'array'` is rejected up front). Empty items (such as `a,,b` or a trailing comma `a,b,`) are rejected rather than silently dropped, and any invalid item reports its 0-based index and offending value (`PORTS[1]: expected a port (0-65535, e.g. 3000), got "abc"` — masked when `sensitive: true`). An already-parsed array may be passed as a `default` (including `[]`), and `generateExample` suggests `a,b,c` joined by `separator`. In TypeScript the element type is inferred from `of`.
 
 ### `trim: false` — keep whitespace when it matters
 
@@ -489,8 +547,9 @@ const env = validateEnv({
 });
 ```
 
-Validate the mode first, then choose an ordinary schema in application code. `validateEnv` does not
-provide conditional rules inside a schema.
+Validate the mode first, then choose an ordinary schema in application code when you need different
+`default` values or types per environment. For making a key required only under a specific mode, use
+`requiredIf` in a single schema instead.
 
 ### Fastify
 
@@ -653,6 +712,26 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 ```
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
+
+## How env-saaf compares to envalid, joi, and zod
+
+| | `env-saaf` | `envalid` | `joi` | `zod` |
+| --- | --- | --- | --- | --- |
+| **Scope** | Environment variables only (flat key-value maps) | Environment variables only | General-purpose schema validation (requests, payloads, config) | General-purpose schema validation (requests, forms, config) |
+| **Runtime dependencies** | Zero | Zero | Multiple `@hapi/*` packages | Zero |
+| **`.env` loading & CLI tooling** | Built-in `.env` parser (`loadEnv`/`parseEnvFile`), `scan`/`check`/`example`/`init` CLI, secret masking | Validation only (pair with Node `--env-file` or `dotenv`) | Validation only (pair with Node `--env-file` or `dotenv`) | Validation only (pair with Node `--env-file` or `dotenv`) |
+| **Error aggregation** | Collects all errors in one pass (`EnvSaafError`, or `{ env, errors }` with `throwOnError: false`) | Collects all errors in one pass (passed to default or custom `reporter`) | Stops on first error by default; pass `{ abortEarly: false }` to collect all | Collects all issues in one pass (`ZodError` via `parse`, or `{ success, error }` via `safeParse`) |
+| **TypeScript inference** | Ships `index.d.ts`; infers flat object types from inline / `as const` schemas (`json` infers as `unknown`, `choices` stays widened) | Written in TypeScript; infers validator return types including literal unions for `choices` | Ships types, but does not infer static TS types from schemas (define interfaces separately or use codegen) | TypeScript-first static inference (`z.infer<typeof schema>`) across nested objects, unions, literals, and transforms |
+
+### When `env-saaf` is a good fit
+
+- You want startup env validation, `.env` file loading (with layering and `${VAR}` interpolation), secret masking, and a CI CLI (`env-saaf check`) to keep `.env.example` in sync with code — all in one zero-dependency Node.js package.
+
+### When another library is a better fit
+
+- **Validating HTTP requests, API payloads, forms, or nested JSON:** `env-saaf` only validates flat environment variable maps and has no nested object schemas or cross-field conditional rules. Use **zod** (especially in TypeScript) or **joi** when you need general data validation.
+- **You already use `zod` or `joi` in the project:** If you already depend on one of them for request/data validation and do not need `env-saaf`'s `.env` parser or `scan`/`check` CLI, validating `process.env` with your existing library avoids adding another tool.
+- **Richer TypeScript inference or non-Node runtimes:** Use **zod** for full static type inference (nested shapes, discriminated unions, narrowed literal enums) or browser/edge runtime support (`env-saaf` uses Node built-ins `node:fs`, `node:net`, and `node:path`). Use **envalid** if you want env-only validation with `devDefault`, proxy-guarded env access, or literal-union inference from `choices`.
 
 ## Versions
 

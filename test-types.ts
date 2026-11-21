@@ -13,6 +13,10 @@ const env = validateEnv({
   NAME: { type: 'string' },
   TENANT_ID: { type: 'uuid', required: true },
   API_HASH: { type: 'hex', sensitive: true },
+  TAGS: { type: 'array', required: true },
+  PORTS: { type: 'array', of: 'port', separator: ';', required: true },
+  ORIGINS: { type: 'array', of: 'url', protocols: ['https'] },
+  FLAGS: { type: 'array', of: 'boolean', default: [true, false] },
 });
 
 // required keys: exact types
@@ -24,6 +28,11 @@ const mode: string = env.MODE;
 // uuid and hex values are strings
 const tenantId: string = env.TENANT_ID;
 const apiHash: string | undefined = env.API_HASH;
+// array values infer their element type from `of` (default string[])
+const tags: string[] = env.TAGS;
+const ports: number[] = env.PORTS;
+const origins: string[] | undefined = env.ORIGINS;
+const flags: boolean[] = env.FLAGS;
 // optional keys: value ya undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
@@ -43,6 +52,8 @@ const wrongType: string = env.PORT;
 const typo = env.TYPO_KEY;
 // @ts-expect-error — optional key undefined ho sakti hai, seedha boolean nahi
 const debugStrict: boolean = env.DEBUG;
+// @ts-expect-error — PORTS is number[], not string[]
+const wrongPorts: string[] = env.PORTS;
 
 // loose schema (jaise EnvSchema type ka variable) par purana loose record milta hai
 const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
@@ -68,6 +79,49 @@ const throwingPort: number = validateEnv(
   { strict: true }
 ).PORT;
 
+// Issue #51: requiredIf — conditionally required keys remain optional in the inferred type.
+const condEnv = validateEnv(
+  {
+    MODE: { type: 'string', default: 'development' },
+    USE_TLS: { type: 'boolean', default: false },
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+    TLS_CERT: { type: 'string', requiredIf: { key: 'USE_TLS', equals: true } },
+    FALLBACK_DSN: { type: 'url', default: 'https://example.com', requiredIf: { key: 'MODE', equals: 'production' } },
+  },
+  { MODE: 'development' }
+);
+const condSentry: string | undefined = condEnv.SENTRY_DSN;
+const condAlert: string | undefined = condEnv.ALERT_WEBHOOK;
+const condTls: string | undefined = condEnv.TLS_CERT;
+const condFallback: string = condEnv.FALLBACK_DSN;
+// @ts-expect-error — conditionally required key without default may be undefined
+const condSentryStrict: string = condEnv.SENTRY_DSN;
+
+validateEnv({
+  // @ts-expect-error — requiredIf must specify either equals or in, not both
+  BAD_BOTH: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod', in: ['prod'] } },
+});
+validateEnv({
+  // @ts-expect-error — requiredIf must specify equals or in
+  BAD_NEITHER: { type: 'string', requiredIf: { key: 'MODE' } },
+});
+// Issue #53: aliases and onWarn keep exact return type inference on canonical keys.
+const aliasedWarnings: string[] = [];
+const aliased = validateEnv(
+  {
+    DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] },
+    PORT: { type: 'port', aliases: ['APP_PORT'] },
+  },
+  { DB_URL: 'https://example.com' },
+  { onWarn: (msg) => aliasedWarnings.push(msg) }
+);
+const aliasedUrl: string = aliased.DATABASE_URL;
+const aliasedPort: number | undefined = aliased.PORT;
+// @ts-expect-error — alias name is not a key on the validated result
+const aliasKey = aliased.DB_URL;
+
+
 // Issue #52: per-key `validate(value, env)` preserves inferred value types.
 const validated = validateEnv(
   {
@@ -83,4 +137,5 @@ const validatedHost: string = validated.REPLICA_HOST;
 const validatedFlag: boolean = validated.FLAG;
 const validatedNotes: string | undefined = validated.NOTES;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, validatedPort, validatedHost, validatedFlag, validatedNotes };
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey };

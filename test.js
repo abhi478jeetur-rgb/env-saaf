@@ -2441,6 +2441,715 @@ assert.deepStrictEqual(
   }
 }
 
+// --- requiredIf: conditionally required variables (issue #51) ---
+{
+  // 1. Up-front schema validation rejects malformed requiredIf specs,
+  // even when the key is absent and even in non-throwing mode.
+  for (const bad of [
+    null,
+    'MODE',
+    123,
+    true,
+    [],
+    {},
+    { key: '' },
+    { key: '   ' },
+    { key: 42, equals: 'production' },
+    { key: 'MODE' },
+    { key: 'MODE', equals: undefined },
+    { key: 'MODE', equals: 'production', in: ['production'] },
+    { key: 'MODE', in: 'production' },
+    { key: 'MODE', in: [] },
+  ]) {
+    assert.throws(
+      () => validateEnv({ SENTRY_DSN: { type: 'url', requiredIf: bad } }, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError && err.errors.some(e => e.startsWith('SENTRY_DSN: "requiredIf')),
+      `expected schema error for requiredIf=${JSON.stringify(bad)}`,
+    );
+  }
+
+  // 2. Basic `equals`: missing + condition true throws the usual required error.
+  const basicSchema = {
+    MODE: { type: 'string', choices: ['development', 'staging', 'production'] },
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+  };
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Empty string is treated as unset, so it also triggers the required error.
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: '' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Provided valid value satisfies the condition.
+  const prodOk = validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: 'https://sentry.example.com/1' });
+  assert.strictEqual(prodOk.MODE, 'production');
+  assert.strictEqual(prodOk.SENTRY_DSN, 'https://sentry.example.com/1');
+  // Provided invalid value reports only the type error (no duplicate missing error).
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: 'not-a-url' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0].includes('SENTRY_DSN: expected a valid URL'),
+  );
+  // Condition false leaves the key optional and omitted.
+  const devOk = validateEnv(basicSchema, { MODE: 'development' });
+  assert.strictEqual(devOk.MODE, 'development');
+  assert.strictEqual('SENTRY_DSN' in devOk, false);
+  // Referenced key absent (or empty) leaves the key optional and omitted.
+  const absentOk = validateEnv(basicSchema, {});
+  assert.strictEqual('SENTRY_DSN' in absentOk, false);
+  const emptyRefOk = validateEnv(basicSchema, { MODE: '' });
+  assert.strictEqual('SENTRY_DSN' in emptyRefOk, false);
+  // Optional key provided while condition is false is still validated.
+  const devWithDsn = validateEnv(basicSchema, { MODE: 'development', SENTRY_DSN: 'https://sentry.example.com/dev' });
+  assert.strictEqual(devWithDsn.SENTRY_DSN, 'https://sentry.example.com/dev');
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'development', SENTRY_DSN: 'bad-url' }),
+    err => err instanceof EnvSaafError && err.errors[0].includes('SENTRY_DSN: expected a valid URL'),
+  );
+
+  // 3. `in: [...]` matches any listed value and stays optional otherwise.
+  const inSchema = {
+    MODE: { type: 'string' },
+    ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+  };
+  for (const mode of ['staging', 'production']) {
+    assert.throws(
+      () => validateEnv(inSchema, { MODE: mode }),
+      err => err instanceof EnvSaafError && err.errors[0] === 'ALERT_WEBHOOK: missing required variable',
+    );
+  }
+  assert.strictEqual('ALERT_WEBHOOK' in validateEnv(inSchema, { MODE: 'development' }), false);
+  assert.strictEqual('ALERT_WEBHOOK' in validateEnv(inSchema, {}), false);
+
+  // 4. Two-pass evaluation: key declaration order does not matter, and
+  // conditions see coerced values, defaults, and transforms from Pass 1.
+  const reversedSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    MODE: { type: 'string', default: 'production' },
+  };
+  assert.throws(
+    () => validateEnv(reversedSchema, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Boolean coercion (and falsy `equals: false`).
+  const tlsSchema = {
+    TLS_CERT: { type: 'string', requiredIf: { key: 'USE_TLS', equals: true } },
+    DEV_NOTICE: { type: 'string', requiredIf: { key: 'USE_TLS', equals: false } },
+    USE_TLS: { type: 'boolean', default: false },
+  };
+  assert.throws(
+    () => validateEnv(tlsSchema, { USE_TLS: 'yes' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'TLS_CERT: missing required variable',
+  );
+  assert.throws(
+    () => validateEnv(tlsSchema, {}),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'DEV_NOTICE: missing required variable',
+  );
+  // Numeric coercion with `in`.
+  const retrySchema = {
+    RETRY_BACKOFF: { type: 'duration', requiredIf: { key: 'RETRIES', in: [1, 2, 3] } },
+    RETRIES: { type: 'int' },
+  };
+  assert.throws(
+    () => validateEnv(retrySchema, { RETRIES: '2' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'RETRY_BACKOFF: missing required variable',
+  );
+  assert.strictEqual('RETRY_BACKOFF' in validateEnv(retrySchema, { RETRIES: '0' }), false);
+  // Transform on referenced key is visible in Pass 2.
+  const transformSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    MODE: { type: 'string', transform: v => v.toLowerCase() },
+  };
+  assert.throws(
+    () => validateEnv(transformSchema, { MODE: 'PRODUCTION' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // If the referenced key failed Pass 1 validation, Pass 2 does not emit a spurious error.
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'invalid' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0].includes('MODE: expected one of'),
+  );
+  // Referenced key outside the schema falls back to raw `env`.
+  const externalRefSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'NODE_ENV', equals: 'production' } },
+  };
+  assert.throws(
+    () => validateEnv(externalRefSchema, { NODE_ENV: 'production' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  assert.strictEqual('SENTRY_DSN' in validateEnv(externalRefSchema, { NODE_ENV: 'test' }), false);
+  assert.strictEqual('SENTRY_DSN' in validateEnv(externalRefSchema, {}), false);
+
+  // 5. Interaction with `default`, `required: true`, `throwOnError: false`, and `loadEnv`.
+  const withDefault = validateEnv(
+    {
+      MODE: { type: 'string', default: 'production' },
+      SENTRY_DSN: { type: 'url', default: 'https://sentry.example.com/default', requiredIf: { key: 'MODE', equals: 'production' } },
+    },
+    {},
+  );
+  assert.strictEqual(withDefault.SENTRY_DSN, 'https://sentry.example.com/default');
+
+  // Issue #204: combining `required: true` and `requiredIf` is rejected up front
+  // as a schema error instead of silently letting `required` win.
+  assert.throws(
+    () => validateEnv(
+      {
+        MODE: { type: 'string', default: 'production' },
+        SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      {},
+    ),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: "required" and "requiredIf" cannot be used together (use one or the other)',
+  );
+
+  // Non-throwing mode collects the conditional required error alongside validated values.
+  const collected = validateEnv(
+    {
+      MODE: { type: 'string', default: 'production' },
+      PORT: { type: 'port', default: 3000 },
+      SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    },
+    {},
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(collected.env, { MODE: 'production', PORT: 3000 });
+  assert.deepStrictEqual(collected.errors, ['SENTRY_DSN: missing required variable']);
+
+  // loadEnv enforces requiredIf from loaded .env files.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-required-if-'));
+  try {
+    const envFile = path.join(dir, '.env');
+    fs.writeFileSync(envFile, 'MODE=production\n');
+    assert.throws(
+      () => loadEnv(basicSchema, { path: envFile, env: {} }),
+      err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+    );
+    fs.writeFileSync(envFile, 'MODE=production\nSENTRY_DSN=https://sentry.example.com/live\n');
+    const loaded = loadEnv(basicSchema, { path: envFile, env: {} });
+    assert.strictEqual(loaded.SENTRY_DSN, 'https://sentry.example.com/live');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+
+// Issue #204: `required` + `requiredIf` contradict each other, and a self-referencing `requiredIf` never fires.
+{
+  // `required: true` together with `requiredIf` is rejected up front —
+  // `required` would otherwise silently win and the condition would be dead config.
+  assert.throws(
+    () => validateEnv(
+      {
+        MODE: { type: 'string', default: 'dev' },
+        SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      { MODE: 'dev' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('SENTRY_DSN: "required" and "requiredIf" cannot be used together (use one or the other)'),
+  );
+  // Schema errors still throw with `{ throwOnError: false }`.
+  assert.throws(
+    () => validateEnv(
+      { SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } } },
+      {},
+      { throwOnError: false },
+    ),
+    err => err instanceof EnvSaafError,
+  );
+  // A `requiredIf` naming its own key is rejected up front.
+  assert.throws(
+    () => validateEnv(
+      { MODE: { type: 'string', requiredIf: { key: 'MODE', equals: 'production' } } },
+      {},
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('MODE: "requiredIf" must name a different key, not itself'),
+  );
+  // A well-formed `requiredIf` still works (regression guard).
+  assert.deepStrictEqual(
+    validateEnv(
+      {
+        MODE: { type: 'string', default: 'development' },
+        SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      { MODE: 'development' },
+    ),
+    { MODE: 'development' },
+  );
+}
+
+// Issue #46: `array` type — split a delimited string into a typed array.
+{
+  // 1. Default `of: 'string'` and explicit `of: 'string'`, trimming items by default.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', of: 'string', required: true } }, { TAGS: 'a,b,c' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', required: true } }, { TAGS: ' a , b , c ' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array' } }, { TAGS: 'solo' }).TAGS,
+    ['solo'],
+  );
+  // trim: false preserves surrounding whitespace on each item.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', of: 'string', trim: false } }, { TAGS: ' a , b ' }).TAGS,
+    [' a ', ' b '],
+  );
+
+  // 2. Custom separators (single-character and multi-character).
+  assert.deepStrictEqual(
+    validateEnv({ PORTS: { type: 'array', of: 'port', separator: ';' } }, { PORTS: '80;443;8080' }).PORTS,
+    [80, 443, 8080],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ PATHS: { type: 'array', separator: '::' } }, { PATHS: 'alpha::beta::gamma' }).PATHS,
+    ['alpha', 'beta', 'gamma'],
+  );
+
+  // 3. Coercion across scalar `of` types (number, int, boolean, url + protocols, email, duration, date).
+  const typed = validateEnv({
+    NUMS: { type: 'array', of: 'number', required: true },
+    INTS: { type: 'array', of: 'int', required: true },
+    FLAGS: { type: 'array', of: 'boolean', required: true },
+    ORIGINS: { type: 'array', of: 'url', protocols: ['https'], required: true },
+    EMAILS: { type: 'array', of: 'email', required: true },
+    TIMEOUTS: { type: 'array', of: 'duration', required: true },
+    DATES: { type: 'array', of: 'date', required: true },
+  }, {
+    NUMS: '1.5, 2, -3.25',
+    INTS: '10, 20, 30',
+    FLAGS: 'true, no, 1, off',
+    ORIGINS: 'https://a.example.com, https://b.example.com',
+    EMAILS: 'admin@example.com, ops@example.com',
+    TIMEOUTS: '500ms, 2s, 1m',
+    DATES: '2026-01-31, 2026-02-01',
+  });
+  assert.deepStrictEqual(typed.NUMS, [1.5, 2, -3.25]);
+  assert.deepStrictEqual(typed.INTS, [10, 20, 30]);
+  assert.deepStrictEqual(typed.FLAGS, [true, false, true, false]);
+  assert.deepStrictEqual(typed.ORIGINS, ['https://a.example.com', 'https://b.example.com']);
+  assert.deepStrictEqual(typed.EMAILS, ['admin@example.com', 'ops@example.com']);
+  assert.deepStrictEqual(typed.TIMEOUTS, [500, 2000, 60000]);
+  assert.strictEqual(typed.DATES.length, 2);
+  assert.ok(typed.DATES.every(d => d instanceof Date));
+
+  // 4. Invalid items report their 0-based index and offending value.
+  assert.throws(
+    () => validateEnv({ PORTS: { type: 'array', of: 'port' } }, { PORTS: '80,abc,443' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('PORTS[1]')
+      && err.errors[0].includes('expected a port')
+      && err.errors[0].includes('got "abc"'),
+  );
+  assert.throws(
+    () => validateEnv({ ORIGINS: { type: 'array', of: 'url', protocols: ['https'] } }, { ORIGINS: 'https://a.com,http://b.com' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('ORIGINS[1]')
+      && err.errors[0].includes('protocols (https)')
+      && err.errors[0].includes('got "http://b.com"'),
+  );
+
+  // 5. Empty items are rejected (not silently dropped) with their index and value.
+  for (const [raw, expectedIndex] of [['a,,c', 1], ['a,   ,c', 1], [',a,b', 0], ['a,b,', 2]]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', of: 'string' } }, { TAGS: raw }),
+      err => err instanceof EnvSaafError
+        && err.errors[0].includes(`TAGS[${expectedIndex}]`)
+        && err.errors[0].includes('expected a non-empty value'),
+    );
+  }
+  assert.throws(
+    () => validateEnv({ INTS: { type: 'array', of: 'int' } }, { INTS: '1,,3' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('INTS[1]')
+      && err.errors[0].includes('expected an integer')
+      && err.errors[0].includes('got ""'),
+  );
+
+  // 6. Defaults: delimited string, already-parsed array (including empty []), and invalid defaults.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', default: 'x,y' } }, {}).TAGS,
+    ['x', 'y'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ PORTS: { type: 'array', of: 'port', default: [80, 443] } }, {}).PORTS,
+    [80, 443],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ FLAGS: { type: 'array', of: 'string', default: [] } }, {}).FLAGS,
+    [],
+  );
+  assert.throws(
+    () => validateEnv({ PORTS: { type: 'array', of: 'port', default: [80, 'bad'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('PORTS[1]') && err.errors[0].includes('got "bad"'),
+  );
+  assert.throws(
+    () => validateEnv({ NUMS: { type: 'array', of: 'number', default: [1, null] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('NUMS[1]') && err.errors[0].includes('expected a number'),
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', default: 123 } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('expected a delimited list'),
+  );
+
+  // 7. Missing optional array is omitted; missing required array fails.
+  assert.deepStrictEqual(validateEnv({ TAGS: { type: 'array' } }, {}), {});
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', required: true } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: missing required variable',
+  );
+
+  // 8. `sensitive: true` masks offending item values without leaking secrets.
+  const secretItem = 'secret_bad_token_99';
+  assert.throws(
+    () => validateEnv(
+      { TOKENS: { type: 'array', of: 'uuid', sensitive: true } },
+      { TOKENS: `550e8400-e29b-41d4-a716-446655440000,${secretItem}` },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('TOKENS[1]')
+      && !err.message.includes(secretItem)
+      && err.errors[0].includes(`got "${maskValue(secretItem)}"`),
+  );
+
+  // 9. Up-front schema validation rejects invalid `of` and `separator` even when key is absent.
+  for (const badOf of ['unknown', 'array', 123, null, {}]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', of: badOf } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0].includes('TAGS: "of" must be a valid item type'),
+    );
+  }
+  for (const badSep of ['', 123, null, []]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', separator: badSep } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0].includes('TAGS: "separator" must be a non-empty string'),
+    );
+  }
+
+  // 10. Transform and non-throwing mode work with `array`.
+  const transformed = validateEnv(
+    { TAGS: { type: 'array', of: 'string', transform: xs => xs.map(s => s.toUpperCase()) } },
+    { TAGS: 'a,b' },
+  );
+  assert.deepStrictEqual(transformed.TAGS, ['A', 'B']);
+  const nonThrowArr = validateEnv(
+    { PORTS: { type: 'array', of: 'port' }, TAGS: { type: 'array' } },
+    { PORTS: '80,nope', TAGS: 'x,y' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(nonThrowArr.env, { TAGS: ['x', 'y'] });
+  assert.strictEqual(nonThrowArr.errors.length, 1);
+  assert.ok(nonThrowArr.errors[0].includes('PORTS[1]'));
+
+  // 11. generateExample produces a delimited placeholder (respecting separator, array default, and sensitive).
+  const exArr = generateExample({
+    TAGS: { type: 'array', required: true },
+    PORTS: { type: 'array', of: 'port', separator: ';' },
+    DEFAULTS: { type: 'array', of: 'port', separator: ';', default: [80, 443] },
+    SECRET_LIST: { type: 'array', sensitive: true },
+  });
+  assert.match(exArr, /^TAGS=a,b,c$/m);
+  assert.match(exArr, /^PORTS=a;b;c$/m);
+  assert.match(exArr, /^DEFAULTS=80;443$/m);
+  assert.match(exArr, /^SECRET_LIST=$/m);
+}
+// Issue #205: aliases must not populate multiple declared keys.
+{
+  const cases = [
+    [{ A: { aliases: ['B'] }, B: { type: 'string' } }, 'A', 'B'],
+    [{ B: { type: 'string' }, A: { aliases: ['B'] } }, 'A', 'B'],
+    [{ A: { aliases: ['SHARED'] }, B: { aliases: ['SHARED'] } }, 'B', 'SHARED'],
+    [{ A: { aliases: ['A'] } }, 'A', 'A'],
+    [{ A: { aliases: ['__proto__'] }, ['__proto__']: { type: 'string' } }, 'A', '__proto__'],
+    [{ A: { aliases: ['toString'] }, B: { aliases: ['toString'] } }, 'B', 'toString'],
+  ];
+  for (const [schema, key, alias] of cases) {
+    for (const throwOnError of [true, false]) {
+      assert.throws(
+        () => validateEnv(schema, {}, { throwOnError }),
+        err => err instanceof EnvSaafError
+          && err.errors.some(message => message.startsWith(`${key}:`) && message.includes(`"${alias}"`)),
+        `expected alias collision for ${key}/${alias} with throwOnError=${throwOnError}`,
+      );
+    }
+  }
+}
+
+// Issue #53: `aliases` accepts renamed/deprecated variables as fallbacks and warns.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+
+  // 1. Schema validation rejects malformed `aliases` up front even when absent.
+  for (const bad of ['OLD_NAME', 123, null, {}, [''], ['   '], [123], [null], ['OK', '']]) {
+    assert.throws(
+      () => validateEnv({ DATABASE_URL: { type: 'url', aliases: bad } }, {}),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('DATABASE_URL: "aliases" must be an array of non-empty strings'),
+      `expected schema error for aliases=${JSON.stringify(bad)}`,
+    );
+  }
+  // Empty array is a valid no-op.
+  assert.deepStrictEqual(validateEnv({ A: { type: 'string', aliases: [] } }, {}), {});
+
+  // 2. Non-function `onWarn` throws TypeError.
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', aliases: ['OLD_A'] } }, {}, { onWarn: 'nope' }),
+    TypeError,
+  );
+
+  // 3. Alias-only config validates, coerces, transforms, and yields under canonical key.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      {
+        PORT: { type: 'port', required: true, aliases: ['APP_PORT'] },
+        ORIGINS: {
+          type: 'string',
+          aliases: ['CORS_ORIGINS'],
+          transform: v => v.split(',').map(s => s.trim()),
+        },
+      },
+      { APP_PORT: '8080', CORS_ORIGINS: 'a.com, b.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 8080);
+    assert.deepStrictEqual(res.ORIGINS, ['a.com', 'b.com']);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(res, 'APP_PORT'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(res, 'CORS_ORIGINS'), false);
+    assert.deepStrictEqual(warnings, [
+      'env-saaf: APP_PORT is deprecated; use PORT instead',
+      'env-saaf: CORS_ORIGINS is deprecated; use ORIGINS instead',
+    ]);
+  }
+
+  // 4. Default warning sink uses console.warn once per warning.
+  {
+    const origWarn = console.warn;
+    const logged = [];
+    console.warn = (...args) => logged.push(args.join(' '));
+    try {
+      const res = validateEnv(
+        { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+        { DB_URL: 'https://db.example.com' },
+      );
+      assert.strictEqual(res.DATABASE_URL, 'https://db.example.com');
+      assert.deepStrictEqual(logged, ['env-saaf: DB_URL is deprecated; use DATABASE_URL instead']);
+    } finally {
+      console.warn = origWarn;
+    }
+  }
+
+  // 5. Both canonical key and alias set: canonical key wins and warning notes alias is ignored.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL', 'LEGACY_DB_URL'] } },
+      { DATABASE_URL: 'https://new.example.com', DB_URL: 'https://old.example.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.DATABASE_URL, 'https://new.example.com');
+    assert.deepStrictEqual(warnings, ['env-saaf: DB_URL is ignored because DATABASE_URL is set']);
+  }
+
+  // 6. Only canonical key set: no warnings.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+      { DATABASE_URL: 'https://new.example.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.DATABASE_URL, 'https://new.example.com');
+    assert.deepStrictEqual(warnings, []);
+  }
+
+  // 7. Multiple aliases: first populated alias wins, subsequent populated aliases warn as ignored.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', aliases: ['OLD_PORT_1', 'OLD_PORT_2', 'OLD_PORT_3'] } },
+      { OLD_PORT_1: '', OLD_PORT_2: '4000', OLD_PORT_3: '5000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 4000);
+    assert.deepStrictEqual(warnings, [
+      'env-saaf: OLD_PORT_2 is deprecated; use PORT instead',
+      'env-saaf: OLD_PORT_3 is ignored because OLD_PORT_2 is set; use PORT instead',
+    ]);
+  }
+
+  // 8. Empty canonical key ('') falls back to alias; empty alias ('') is treated as unset.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      {
+        HOST: { type: 'host', aliases: ['APP_HOST'] },
+        MODE: { type: 'string', default: 'dev', aliases: ['APP_MODE'] },
+      },
+      { HOST: '', APP_HOST: 'localhost', APP_MODE: '' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.HOST, 'localhost');
+    assert.strictEqual(res.MODE, 'dev');
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_HOST is deprecated; use HOST instead']);
+  }
+
+  // 9. Alias wins over default; missing canonical + alias still fails required without warning.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', default: 3000, aliases: ['APP_PORT'] } },
+      { APP_PORT: '9000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 9000);
+    assert.strictEqual(warnings.length, 1);
+
+    const reqWarnings = [];
+    assert.throws(
+      () => validateEnv(
+        { PORT: { type: 'port', required: true, aliases: ['APP_PORT'] } },
+        {},
+        { onWarn: msg => reqWarnings.push(msg) },
+      ),
+      err => err instanceof EnvSaafError && err.errors.includes('PORT: missing required variable'),
+    );
+    assert.deepStrictEqual(reqWarnings, []);
+  }
+
+  // 10. Invalid alias value reports error under canonical key and respects `sensitive: true`.
+  {
+    const warnings = [];
+    assert.throws(
+      () => validateEnv(
+        { SESSION_ID: { type: 'uuid', sensitive: true, aliases: ['OLD_SESSION_ID'] } },
+        { OLD_SESSION_ID: 'not-a-uuid-secret99' },
+        { onWarn: msg => warnings.push(msg) },
+      ),
+      err => err instanceof EnvSaafError
+        && !err.message.includes('not-a-uuid-secret99')
+        && err.errors[0].startsWith('SESSION_ID:')
+        && err.errors[0].includes('got "no***99"'),
+    );
+    assert.deepStrictEqual(warnings, ['env-saaf: OLD_SESSION_ID is deprecated; use SESSION_ID instead']);
+  }
+
+  // 11. Strict mode recognises declared aliases and still flags unknown variables.
+  {
+    const warnings = [];
+    const okStrict = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+      { DB_URL: 'https://db.example.com' },
+      { strict: true, onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(okStrict.DATABASE_URL, 'https://db.example.com');
+    assert.strictEqual(warnings.length, 1);
+
+    assert.throws(
+      () => validateEnv(
+        { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+        { DB_URL: 'https://db.example.com', TYPO_KEY: '1' },
+        { strict: true, onWarn: () => {} },
+      ),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'TYPO_KEY: set but not in schema (strict mode)',
+    );
+  }
+
+  // 12. Repeating an alias on the same rule does not emit duplicate warnings.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', aliases: ['APP_PORT', 'APP_PORT'] } },
+      { PORT: '3000', APP_PORT: '4000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 3000);
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is ignored because PORT is set']);
+  }
+
+  // 13. Non-throwing mode preserves `{ env, errors }` shape and emits warnings via `onWarn`.
+  {
+    const warnings = [];
+    const collected = validateEnv(
+      { PORT: { type: 'port', required: true, aliases: ['APP_PORT'] } },
+      { APP_PORT: '3000' },
+      { throwOnError: false, onWarn: msg => warnings.push(msg) },
+    );
+    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [] });
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is deprecated; use PORT instead']);
+  }
+
+  // 14. loadEnv passes `onWarn` through and resolves aliases from a `.env` file.
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-aliases-'));
+    try {
+      const envFile = path.join(dir, '.env');
+      fs.writeFileSync(envFile, 'OLD_PORT=7070\n');
+      const warnings = [];
+      const res = loadEnv(
+        { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+        { path: envFile, env: {}, onWarn: msg => warnings.push(msg) },
+      );
+      assert.strictEqual(res.PORT, 7070);
+      assert.deepStrictEqual(warnings, ['env-saaf: OLD_PORT is deprecated; use PORT instead']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
+// Issue #186: validateEnv treats an empty string ('') as unset across
+// optional, required, and default rules, while whitespace-only input is provided.
+{
+  const optional = validateEnv({ NICK: { type: 'string' } }, { NICK: '' });
+  assert.deepStrictEqual(optional, {});
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(optional, 'NICK'), false);
+
+  assert.throws(
+    () => validateEnv({ PORT: { type: 'port', required: true } }, { PORT: '' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0] === 'PORT: missing required variable',
+  );
+
+  const defaulted = validateEnv(
+    {
+      HOST: { type: 'string', default: 'localhost' },
+      PORT: { type: 'port', required: true, default: 3000 },
+    },
+    { HOST: '', PORT: '' },
+  );
+  assert.deepStrictEqual(defaulted, { HOST: 'localhost', PORT: 3000 });
+
+  // Whitespace-only is provided, not unset: trimmed to '' by default, preserved with trim: false.
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, { NICK: '   ' }), { NICK: '' });
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string', trim: false } }, { NICK: '   ' }), { NICK: '   ' });
+
+  // parseEnvFile preserves KEY= as '', which validateEnv then treats as unset.
+  const parsed = parseEnvFile('NICK=\n');
+  assert.deepStrictEqual(parsed, { NICK: '' });
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, parsed), {});
+}
+
 // Issue #52: per-key `validate(value, env)` function for custom rules.
 {
   // 1. Non-function `validate` is rejected up front in validateSchema,

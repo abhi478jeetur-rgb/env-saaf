@@ -1,9 +1,22 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvType = EnvScalarType | 'array';
+
+export type RequiredIfCondition =
+  | { key: string; equals: string | number | boolean; in?: never }
+  | { key: string; in: Array<string | number | boolean>; equals?: never };
 
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
-  /** A default may be an already-parsed object or array for `type: 'json'`, or a `Date` for `type: 'date'`. */
+  /**
+   * Make this key required only when another variable matches a condition:
+   * `{ key: 'MODE', equals: 'production' }` or `{ key: 'MODE', in: ['staging', 'production'] }`.
+   * Evaluated in a second pass after all keys are coerced and defaults are applied,
+   * so declaration order in the schema does not matter. When the condition does not hold
+   * (or the referenced key is absent), the key stays optional.
+   */
+  requiredIf?: RequiredIfCondition;
+  /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
   /**
@@ -70,20 +83,49 @@ export interface EnvRule {
    * Also leaves its placeholder empty in `generateExample`. Default is false.
    */
   sensitive?: boolean;
+  /**
+   * Item type for `type: 'array'` (default `'string'`). Every split element is
+   * coerced and validated as this type; nested `'array'` is not allowed.
+   * Ignored for other types.
+   */
+  of?: EnvScalarType;
+  /**
+   * Non-empty delimiter string for `type: 'array'` (default `','`).
+   * Empty items between or around separators are rejected with their index.
+   * Ignored for other types.
+   */
+  separator?: string;
+  /**
+   * Deprecated variable names accepted as fallbacks when this key is unset
+   * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
+   * emits a deprecation warning; if the canonical key is also set, the
+   * canonical key wins and a warning notes the alias is ignored.
+   */
+  aliases?: string[];
 }
 
 export type EnvSchema = Record<string, EnvRule>;
+
+type EnvScalarValue<T> =
+  T extends 'number' | 'int' | 'port' | 'duration' ? number :
+  T extends 'boolean' ? boolean :
+  T extends 'json' ? unknown :
+  T extends 'date' ? Date :
+  string;
 
 /**
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'int' / 'port' / 'duration' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
+ * 'array' -> array of the `of` item type (default `string[]`),
  * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
  * / host / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =
   R extends { transform: (value: any) => infer T } ? T :
+  R extends { type: 'array'; of: infer O } ? EnvScalarValue<O>[] :
+  R extends { type: 'array' } ? string[] :
   R extends { type: 'number' } ? number :
   R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :
@@ -125,6 +167,11 @@ export interface ValidateOptions {
    * not a problem in the environment.
    */
   throwOnError?: boolean;
+  /**
+   * Callback invoked for each deprecation or ignored-alias warning (default `console.warn`).
+   * Pass a custom logger (or `() => {}` to silence warnings).
+   */
+  onWarn?: (message: string) => void;
 }
 
 /** The result of `validateEnv(..., { throwOnError: false })`. */
@@ -148,6 +195,8 @@ export interface LoadEnvOptions {
   assign?: boolean;
   /** Passed through to validateEnv (e.g. strict: true). */
   strict?: boolean;
+  /** Passed through to validateEnv (e.g. custom logger for alias warnings). */
+  onWarn?: (message: string) => void;
 }
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;

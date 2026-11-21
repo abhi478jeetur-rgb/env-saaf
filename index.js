@@ -38,6 +38,7 @@ const TYPE_EXAMPLES = {
   file: './config.json',
   duration: '500ms, 30s, 15m, 2h, 1d, 1w',
   host: 'db.internal, localhost, 10.0.0.5',
+  array: 'a,b,c',
 };
 
 const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
@@ -48,6 +49,8 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 // silently (issue #134). Errors name the key and the offending option.
 function validateSchema(schema) {
   const errors = [];
+  const keys = new Set(Object.keys(schema));
+  const aliasOwners = new Map();
   for (const [key, rule] of Object.entries(schema)) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
@@ -87,11 +90,59 @@ function validateSchema(schema) {
     if (rule.sensitive !== undefined && typeof rule.sensitive !== 'boolean') {
       errors.push(`${key}: "sensitive" must be a boolean`);
     }
+    if (rule.requiredIf !== undefined) {
+      const cond = rule.requiredIf;
+      const isObj = cond !== null && typeof cond === 'object' && !Array.isArray(cond);
+      if (!isObj || typeof cond.key !== 'string' || cond.key.trim() === '') {
+        errors.push(`${key}: "requiredIf" must be an object with a non-empty string "key" and either "equals" or "in"`);
+      } else {
+        const hasEquals = Object.prototype.hasOwnProperty.call(cond, 'equals') && cond.equals !== undefined;
+        const hasIn = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined;
+        if (hasEquals === hasIn) {
+          errors.push(`${key}: "requiredIf" must specify either "equals" or "in" (not both)`);
+        } else if (hasIn && (!Array.isArray(cond.in) || cond.in.length === 0)) {
+          errors.push(`${key}: "requiredIf.in" must be a non-empty array`);
+        }
+        // Issue #204: a `requiredIf` naming its own key can never fire — absent
+        // means the condition is false, present means the key is satisfied.
+        if (cond.key === key) {
+          errors.push(`${key}: "requiredIf" must name a different key, not itself`);
+        }
+      }
+    }
+    // Issue #204: `required: true` together with `requiredIf` is contradictory
+    // (`required` would silently win and the condition would be dead config).
+    if (rule.required && rule.requiredIf !== undefined) {
+      errors.push(`${key}: "required" and "requiredIf" cannot be used together (use one or the other)`);
+    }
+    if (rule.of !== undefined && (typeof rule.of !== 'string' || !KNOWN_TYPES.has(rule.of) || rule.of === 'array')) {
+      errors.push(`${key}: "of" must be a valid item type (e.g. 'string', 'number', 'url')`);
+    }
+    if (rule.separator !== undefined && (typeof rule.separator !== 'string' || rule.separator.length === 0)) {
+      errors.push(`${key}: "separator" must be a non-empty string`);
+    }
+    if (rule.aliases !== undefined) {
+      const bad = !Array.isArray(rule.aliases)
+        || rule.aliases.some(a => typeof a !== 'string' || a.trim() === '');
+      if (bad) {
+        errors.push(`${key}: "aliases" must be an array of non-empty strings`);
+      } else {
+        for (const alias of rule.aliases) {
+          if (keys.has(alias)) {
+            errors.push(`${key}: alias "${alias}" conflicts with a declared schema key`);
+          } else if (aliasOwners.has(alias) && aliasOwners.get(alias) !== key) {
+            errors.push(`${key}: alias "${alias}" is already used by "${aliasOwners.get(alias)}"`);
+          } else {
+            aliasOwners.set(alias, key);
+          }
+        }
+      }
+    }
   }
   if (errors.length) throw new EnvSaafError(errors);
 }
 
-function coerce(key, raw, type, trim = true, protocols, sensitive = false) {
+function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
   // trailing space). The default stays true: stray spaces from pasted
@@ -312,6 +363,34 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false) {
       }
       return n;
     }
+    case 'array': {
+      // Split a delimited string (or validate an already-parsed array, e.g. a
+      // default) and coerce each item with `of` (default 'string'). Empty items
+      // are rejected rather than silently dropped so accidental double or
+      // trailing separators fail fast with the offending index and value.
+      let parts;
+      if (Array.isArray(raw)) {
+        parts = raw;
+      } else if (typeof raw === 'string') {
+        parts = raw.split(separator);
+      } else {
+        throw new Error(`${key}: expected a delimited list (e.g. ${TYPE_EXAMPLES.array}), got "${shown}"`);
+      }
+      const itemType = of || 'string';
+      return parts.map((part, i) => {
+        const itemKey = `${key}[${i}]`;
+        const itemVal = typeof part === 'string' ? (trim ? part.trim() : part) : part;
+        if (itemVal === undefined || itemVal === null || itemVal === '') {
+          if (itemType === 'string') {
+            const rawStr = part === undefined || part === null ? '' : String(part);
+            const itemShown = sensitive ? maskValue(rawStr) : rawStr;
+            throw new Error(`${itemKey}: expected a non-empty value, got "${itemShown}"`);
+          }
+          return coerce(itemKey, part === undefined || part === null ? '' : part, itemType, trim, protocols, sensitive);
+        }
+        return coerce(itemKey, part, itemType, trim, protocols, sensitive);
+      });
+    }
     default: throw new Error(`${key}: unknown type "${type}"`);
   }
 }
@@ -330,15 +409,55 @@ function validateEnv(schema, env = process.env, options = {}) {
   // Reject a malformed schema before looking at any values, so a typo on an
   // absent optional key fails immediately instead of passing silently.
   validateSchema(schema);
+  if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
+    throw new TypeError('env-saaf: "onWarn" option must be a function');
+  }
+  const warn = options.onWarn || ((msg) => console.warn(msg));
   if (options.strict) {
+    const knownAliases = new Set();
+    for (const rule of Object.values(schema)) {
+      if (rule && Array.isArray(rule.aliases)) {
+        for (const alias of rule.aliases) knownAliases.add(alias);
+      }
+    }
     for (const key of Object.keys(env)) {
-      if (!Object.prototype.hasOwnProperty.call(schema, key) && env[key] !== undefined && env[key] !== '') {
+      if (!Object.prototype.hasOwnProperty.call(schema, key)
+        && !knownAliases.has(key)
+        && env[key] !== undefined && env[key] !== '') {
         errors.push(`${key}: set but not in schema (strict mode)`);
       }
     }
   }
+  const pendingRequiredIf = [];
   for (const [key, rule] of Object.entries(schema)) {
     let raw = env[key];
+    // Issue #53: aliases let a renamed variable migrate without a flag day.
+    // If the canonical key is set it wins and any populated alias is noted
+    // as ignored; if unset, the first populated alias supplies the value
+    // with a deprecation warning. Empty strings count as unset everywhere.
+    if (Array.isArray(rule.aliases) && rule.aliases.length) {
+      const seenAliases = new Set([key]);
+      const populatedAliases = [];
+      for (const alias of rule.aliases) {
+        if (seenAliases.has(alias)) continue;
+        seenAliases.add(alias);
+        if (env[alias] !== undefined && env[alias] !== '') {
+          populatedAliases.push(alias);
+        }
+      }
+      if (raw !== undefined && raw !== '') {
+        for (const alias of populatedAliases) {
+          warn(`env-saaf: ${alias} is ignored because ${key} is set`);
+        }
+      } else if (populatedAliases.length) {
+        const [winner, ...ignored] = populatedAliases;
+        raw = env[winner];
+        warn(`env-saaf: ${winner} is deprecated; use ${key} instead`);
+        for (const alias of ignored) {
+          warn(`env-saaf: ${alias} is ignored because ${winner} is set; use ${key} instead`);
+        }
+      }
+    }
     // A default goes through the same coercion and checks as a real value,
     // so a typo in it fails startup with the key named. A supplied value
     // still wins; transform is skipped for defaults (see below).
@@ -347,13 +466,14 @@ function validateEnv(schema, env = process.env, options = {}) {
       if (rule.default !== undefined) { raw = rule.default; usingDefault = true; }
       else {
         if (rule.required) errors.push(`${key}: missing required variable`);
+        else if (rule.requiredIf !== undefined) pendingRequiredIf.push([key, rule.requiredIf]);
         continue;
       }
     }
     const sensitive = rule.sensitive === true;
     const shown = sensitive ? maskValue(raw) : raw;
     try {
-      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols, sensitive);
+      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator);
       // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
@@ -461,6 +581,28 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
       out[key] = val;
     } catch (e) { errors.push(e.message); }
+  }
+  // Pass 2 (issue #51): evaluate `requiredIf` after Pass 1 has coerced values
+  // and applied defaults across the whole schema, so declaration order never
+  // matters. If the referenced key is not declared in the schema, fall back to
+  // the raw `env` object so external flags like NODE_ENV still work.
+  for (const [key, cond] of pendingRequiredIf) {
+    let hasRef = false;
+    let refVal;
+    if (Object.prototype.hasOwnProperty.call(out, cond.key)) {
+      hasRef = true;
+      refVal = out[cond.key];
+    } else if (!Object.prototype.hasOwnProperty.call(schema, cond.key)
+      && Object.prototype.hasOwnProperty.call(env, cond.key)
+      && env[cond.key] !== undefined && env[cond.key] !== '') {
+      hasRef = true;
+      refVal = env[cond.key];
+    }
+    if (!hasRef) continue;
+    const matched = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined
+      ? cond.in.includes(refVal)
+      : refVal === cond.equals;
+    if (matched) errors.push(`${key}: missing required variable`);
   }
   // Non-throwing mode (issue #55): a health check, CLI or server that wants to
   // log every config problem and keep booting asks for the values that did
@@ -878,11 +1020,14 @@ function generateExample(schema) {
   for (const [key, rule] of Object.entries(schema)) {
     lines.push(`# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`);
     const looksSecret = rule.sensitive === true || key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
-    const placeholder = rule.default !== undefined ? rule.default
+    const placeholder = rule.default !== undefined
+      ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
         : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost' : rule.type === 'file' ? './config.json' : 'your_value_here');
+        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost'
+        : rule.type === 'file' ? './config.json'
+        : rule.type === 'array' ? ['a', 'b', 'c'].join(rule.separator || ',') : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';
