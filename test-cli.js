@@ -298,6 +298,52 @@ try {
     assert.match(r.stdout, /Usage: env-saaf/);
   }
 
+  // --- print: credentials embedded in URLs are redacted (issue #505) ---------
+  {
+    const dir = mkProject({
+      'env.schema.js': [
+        'module.exports = {',
+        "  DATABASE_URL: { type: 'url', required: true },",
+        "  CACHE_URL: { type: 'url', required: true },",
+        "  HOMEPAGE: { type: 'url', required: true },",
+        "  REPLICAS: { type: 'array', of: 'url', required: true },",
+        "  NAME: { type: 'string', required: true },",
+        '};',
+        '',
+      ].join('\n'),
+      '.env': [
+        'DATABASE_URL=postgres://user:pass@localhost:5432/mydb?sslmode=require',
+        'CACHE_URL=redis://:s3cr3t@cache:6379/0',
+        'HOMEPAGE=https://user@example.com/path',
+        'REPLICAS=mysql://ro:pw1@db1:3306/app,mysql://ro:pw2@db2:3306/app',
+        'NAME=a:b@c',
+        '',
+      ].join('\n'),
+    });
+    const text = run(['print', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(text.status, 0, text.stderr);
+    assert.match(text.stdout, /^DATABASE_URL=postgres:\/\/user:\*\*\*@localhost:5432\/mydb\?sslmode=require$/m);
+    assert.match(text.stdout, /^CACHE_URL=redis:\/\/:\*\*\*@cache:6379\/0$/m);
+    // No password: the URL prints exactly as before, as does a non-URL value.
+    assert.match(text.stdout, /^HOMEPAGE=https:\/\/user@example\.com\/path$/m);
+    assert.match(text.stdout, /^NAME=a:b@c$/m);
+    for (const secret of ['pass@', 's3cr3t', 'pw1', 'pw2']) {
+      assert.ok(!text.stdout.includes(secret), `text output leaks ${secret}`);
+    }
+
+    const json = run(['print', dir, '--schema', 'env.schema.js', '--json'], dir);
+    assert.strictEqual(json.status, 0, json.stderr);
+    const values = JSON.parse(json.stdout);
+    assert.strictEqual(values.DATABASE_URL, 'postgres://user:***@localhost:5432/mydb?sslmode=require');
+    assert.strictEqual(values.CACHE_URL, 'redis://:***@cache:6379/0');
+    assert.deepStrictEqual(values.REPLICAS, ['mysql://ro:***@db1:3306/app', 'mysql://ro:***@db2:3306/app']);
+    assert.strictEqual(values.HOMEPAGE, 'https://user@example.com/path');
+
+    // --reveal still prints the real value.
+    const revealed = run(['print', dir, '--schema', 'env.schema.js', '--json', '--reveal'], dir);
+    assert.strictEqual(JSON.parse(revealed.stdout).DATABASE_URL, 'postgres://user:pass@localhost:5432/mydb?sslmode=require');
+  }
+
   // --- the assertions are real: a deliberately wrong exit-code expectation fails
   {
     const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE, '.env.example': EXAMPLE_BOTH });
