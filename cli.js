@@ -915,15 +915,26 @@ function looksSecretName(name) {
   return name.split('_').some((part) => SECRET_WORDS.has(part.toUpperCase()));
 }
 
+function maskUrlPassword(value) {
+  if (typeof value !== 'string') return value;
+
+  const match = /^([a-z][a-z0-9+.-]*:\/\/[^/?#@]*:)([^/?#@]*)@/i.exec(value);
+  if (!match) return value;
+
+  return `${match[1]}***@${value.slice(match[0].length)}`;
+}
+
 function maskBySchema(schema, values, prefix = '') {
   const out = Array.isArray(values) ? [...values] : { ...values };
   for (const [key, rule] of Object.entries(schema)) {
     if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
     if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
       out[key] = maskBySchema(rule.schema, out[key], prefix + rule.prefix);
-    } else if (rule && (rule.sensitive === true || looksSecretName(prefix + key))) {
-      out[key] = typeof out[key] === 'string' ? maskValue(out[key]) : '[REDACTED]';
-    }
+   } else if (rule && (rule.sensitive === true || looksSecretName(prefix + key))) {
+  out[key] = typeof out[key] === 'string' ? maskValue(out[key]) : '[REDACTED]';
+} else if (typeof out[key] === 'string') {
+  out[key] = maskUrlPassword(out[key]);
+}
   }
   return out;
 }

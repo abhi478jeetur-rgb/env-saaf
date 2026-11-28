@@ -232,6 +232,52 @@ try {
     assert.match(after.stdout, /^env-saaf /);
   }
 
+  // --- print redacts passwords embedded in credential URLs --------------------
+{
+  const dir = mkProject({
+    '.env': [
+  'DATABASE_URL=postgres://user:supersecret@localhost:5432/mydb',
+  'API_URL=https://example.com/api',
+  'PORT=3000',
+].join('\n') + '\n',
+    'env.schema.js': `
+      module.exports = {
+  DATABASE_URL: { type: 'url', required: true },
+  API_URL: { type: 'url', required: true },
+  PORT: { type: 'port', required: true }
+};
+    `,
+  });
+
+  const text = run(['print', '.', '--schema', 'env.schema.js'], dir);
+  assert.strictEqual(text.status, 0);
+  assert.match(
+    text.stdout,
+    /DATABASE_URL=postgres:\/\/user:\*\*\*@localhost:5432\/mydb/,
+    `password should be redacted in text output:\n${text.stdout}`
+  );
+  assert.ok(!text.stdout.includes('supersecret'));
+
+  const json = run(['print', '.', '--schema', 'env.schema.js', '--json'], dir);
+  assert.strictEqual(json.status, 0);
+
+  const parsed = JSON.parse(json.stdout);
+  assert.strictEqual(
+    parsed.DATABASE_URL,
+    'postgres://user:***@localhost:5432/mydb'
+  );
+  assert.ok(!json.stdout.includes('supersecret'));
+    const revealed = run(
+    ['print', '.', '--schema', 'env.schema.js', '--reveal'],
+    dir
+  );
+  assert.strictEqual(revealed.status, 0);
+  assert.match(
+    revealed.stdout,
+    /DATABASE_URL=postgres:\/\/user:supersecret@localhost:5432\/mydb/
+  );
+}
+
   // --- unknown command prints usage and exits 2 -------------------------------
   {
     const dir = mkProject({});
